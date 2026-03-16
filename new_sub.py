@@ -4,7 +4,6 @@ import time
 import os
 import argparse
 import socket
-import csv
 
 # ---------------------------------------------------------------------------
 from crypto_algos.chacha20_provider import ChaCha20Provider
@@ -21,63 +20,79 @@ args = parser.parse_args()
 GOOSE_TYPE = 0x88B8
 IFACE = "h2-eth0" 
 
-# Global tracking
+# DYNAMIC TRACKING
 valid_packet_count = 0
-total_sub_crypto_time = 0.0
-total_network_transit_time = 0.0
-csv_file = open("subscriber_metrics.csv", "w", newline='')
-csv_writer = csv.writer(csv_file)
-csv_writer.writerow(["SqNum", "Trip_Command", "Net_Transit_ms", "Sub_Total_Crypto_ms"])
+sum_net_transit = 0.0
+total_payload_bits = 0
+metric_sums = {}
 
-def process_goose_frame(payload_bytes, crypto_provider):
-    global valid_packet_count, total_sub_crypto_time, total_network_transit_time
+def process_goose_frame(payload_bytes, crypto_provider, raw_packet_len):
+    global valid_packet_count, sum_net_transit, total_payload_bits, metric_sums
     
-    # Catch the exact microsecond the frame leaves the wire
     wire_recv_timestamp = time.time()
-    
     if not payload_bytes: return
     raw_payload = payload_bytes.decode('utf-8', errors='ignore')
     
     try:
         payload = json.loads(raw_payload)
         send_timestamp = payload.get("wire_send_timestamp", wire_recv_timestamp)
-        t_net = (wire_recv_timestamp - send_timestamp) * 1000
-        t_net = max(0.0001, t_net) # Prevent 0.0ms anomalies
+        t_net = max(0.0001, (wire_recv_timestamp - send_timestamp) * 1000)
         
         # 1. Cryptographic Verification
         if crypto_provider is None or payload.get("algo") == "None (Plaintext)":
             raw_msg = bytes.fromhex(payload["data"])
-            sub_crypto_ms = 0.0
+            sub_metrics = {"sub_total_crypto_ms": 0.0}
         else:
             raw_msg, sub_metrics = crypto_provider.verify(payload)
-            sub_crypto_ms = sub_metrics["sub_total_crypto_ms"]
 
         goose_data = json.loads(raw_msg.decode('utf-8'))
         sq_num = goose_data['APDU']['SqNum']
-        trip_cmd = goose_data['APDU']['Trip_Command']
         
-        if sq_num > 1: # Ignore warmup packet
+        # 2. Dynamically Accumulate Metrics (Skip warmup packet)
+        if sq_num > 1: 
             valid_packet_count += 1
-            total_sub_crypto_time += sub_crypto_ms
-            total_network_transit_time += t_net
-            csv_writer.writerow([sq_num, trip_cmd, t_net, sub_crypto_ms])
+            sum_net_transit += t_net
+            total_payload_bits += (raw_packet_len * 8)
             
+            for key, val in sub_metrics.items():
+                metric_sums[key] = metric_sums.get(key, 0.0) + val
+            
+            if valid_packet_count % 25 == 0:
+                tot_ms = sub_metrics.get("sub_total_crypto_ms", 0.0)
+                print(f"[*] Recv {valid_packet_count}/100 | Transit: {t_net:.4f}ms | Sub Crypto: {tot_ms:.4f}ms")
+            
+            # 3. Final Averages and Exiting
             if valid_packet_count == 100:
-                avg_sub = total_sub_crypto_time / 100.0
-                avg_net = total_network_transit_time / 100.0
-                print(f"[*] Received 100 valid messages. Test complete.")
-                print(f"  =========================================")
-                print(f"  Avg Network Transit Time : {avg_net:.5f} ms")
-                print(f"  Avg Decryption Time      : {avg_sub:.5f} ms")
-                print(f"  =========================================\n")
-                print(f"  NOTE: To get TRUE End-to-End Latency, add the Publisher's")
-                print(f"  Avg Crypto Time to the two metrics above!")
-                os._exit(0) # Force clean exit
+                avg_net = sum_net_transit / 100.0
+                
+                # Decryption Throughput (Mbps)
+                total_crypto_sum = metric_sums.get("sub_total_crypto_ms", 0.0)
+                crypto_time_sec = max(0.0001, total_crypto_sum / 1000.0)
+                throughput_mbps = (total_payload_bits / crypto_time_sec) / 1_000_000
+                
+                algo_name = crypto_provider.get_algo_name() if crypto_provider else "NONE (Plaintext)"
+                
+                print(f"\n[*] =========================================")
+                print(f"[*] SUBSCRIBER METRICS (100 Message Average)")
+                print(f"[*] Algorithm: {algo_name}")
+                print(f"[*] =========================================")
+                print(f"  Avg Network Transit     : {avg_net:.5f} ms")
+                print(f"  -----------------------------------------")
+                
+                # Print dynamic sub-metrics
+                for key, total_val in metric_sums.items():
+                    if key != "sub_total_crypto_ms":
+                        formatted_name = key.replace('_', ' ').title()
+                        print(f"  Avg {formatted_name.ljust(22)}: {(total_val / 100.0):.5f} ms")
+                
+                print(f"  -----------------------------------------")
+                print(f"  Total Avg Sub Crypto    : {(total_crypto_sum / 100.0):.5f} ms")
+                print(f"  Processing Throughput   : {throughput_mbps:.2f} Mbps")
+                print(f"[*] =========================================")
+                os._exit(0) 
 
-    except ValueError as ve:
-        print(f"[*] SECURITY ALERT: {str(ve)}\n")
-    except Exception:
-        pass 
+    except ValueError as ve: print(f"[*] SECURITY ALERT: {str(ve)}\n")
+    except Exception: pass 
 
 def start_subscriber(crypto_provider):
     algo_name = crypto_provider.get_algo_name() if crypto_provider else "NONE (Plaintext)"
@@ -89,7 +104,7 @@ def start_subscriber(crypto_provider):
     
     while True:
         raw_packet = sock.recv(2048)
-        process_goose_frame(raw_packet[14:], crypto_provider)
+        process_goose_frame(raw_packet[14:], crypto_provider, len(raw_packet))
 
 def get_crypto_provider(algo_name):
     algo_name = algo_name.lower()
@@ -97,9 +112,7 @@ def get_crypto_provider(algo_name):
     elif algo_name == "ed25519": return Ed25519Provider(role="subscriber")
     elif algo_name == "ecies": return ECIESProvider(role="subscriber")
     
-    with open("keys/shared_key.bin", "rb") as f:
-        master_shared_key = f.read()
-        
+    with open("keys/shared_key.bin", "rb") as f: master_shared_key = f.read()
     if algo_name == "chacha": return ChaCha20Provider(master_shared_key)
     elif algo_name == "ascon": return Ascon128aProvider(master_shared_key)
     elif algo_name == "aesgcm": return AESGCMProvider(master_shared_key)

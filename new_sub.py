@@ -1,9 +1,12 @@
 #!/usr/bin/env python3
-import json
 import time
 import os
 import argparse
 import socket
+import struct
+
+# --- Import your PyGoose unpacker ---
+from goose import unpack_goose 
 
 # ---------------------------------------------------------------------------
 from crypto_algos.chacha20_provider import ChaCha20Provider
@@ -26,46 +29,53 @@ sum_net_transit = 0.0
 total_payload_bits = 0
 metric_sums = {}
 
-def process_goose_frame(payload_bytes, crypto_provider, raw_packet_len):
+def process_goose_frame(raw_packet, crypto_provider):
     global valid_packet_count, sum_net_transit, total_payload_bits, metric_sums
     
     wire_recv_timestamp = time.time()
-    if not payload_bytes: return
-    raw_payload = payload_bytes.decode('utf-8', errors='ignore')
+    
+    # Needs 14 (Eth Header) + 8 (Timestamp) = 22 bytes minimum
+    if len(raw_packet) < 22: return
+    
+    eth_header = raw_packet[:14]
+    timestamp_bytes = raw_packet[14:22]
+    secure_stream = raw_packet[22:]
     
     try:
-        payload = json.loads(raw_payload)
-        send_timestamp = payload.get("wire_send_timestamp", wire_recv_timestamp)
+        # 1. Unpack the 8-byte timestamp
+        send_timestamp = struct.unpack("!d", timestamp_bytes)[0]
         t_net = max(0.0001, (wire_recv_timestamp - send_timestamp) * 1000)
         
-        # 1. Cryptographic Verification
-        if crypto_provider is None or payload.get("algo") == "None (Plaintext)":
-            raw_msg = bytes.fromhex(payload["data"])
+        # 2. Cryptographic Verification of the GOOSE payload
+        if crypto_provider is None:
+            raw_goose_payload = secure_stream
             sub_metrics = {"sub_total_crypto_ms": 0.0}
         else:
-            raw_msg, sub_metrics = crypto_provider.verify(payload)
+            raw_goose_payload, sub_metrics = crypto_provider.verify(secure_stream)
 
-        goose_data = json.loads(raw_msg.decode('utf-8'))
-        sq_num = goose_data['APDU']['SqNum']
+        # 3. Reconstruct the full Layer 2 frame and parse it
+        # We stitch the plaintext MAC addresses back onto the decrypted GOOSE body
+        full_frame = eth_header + raw_goose_payload
+        goose_data = unpack_goose(full_frame)
+        sq_num = goose_data.sq_num
         
-        # 2. Dynamically Accumulate Metrics (Skip warmup packet)
+        # 4. Dynamically Accumulate Metrics (Skip warmup packet where sq_num == 0 or 1)
         if sq_num > 1: 
             valid_packet_count += 1
             sum_net_transit += t_net
-            total_payload_bits += (raw_packet_len * 8)
+            total_payload_bits += (len(raw_packet) * 8)
             
             for key, val in sub_metrics.items():
                 metric_sums[key] = metric_sums.get(key, 0.0) + val
             
-            if valid_packet_count % 25 == 0:
+            if valid_packet_count % 20 == 0:
                 tot_ms = sub_metrics.get("sub_total_crypto_ms", 0.0)
-                print(f"[*] Recv {valid_packet_count}/100 | Transit: {t_net:.4f}ms | Sub Crypto: {tot_ms:.4f}ms")
+                print(f"[*] Recv {valid_packet_count}/100 | Transit: {t_net:.4f}ms | Sub Crypto: {tot_ms:.4f}ms | SqNum: {sq_num}")
             
-            # 3. Final Averages and Exiting
+            # 5. Final Averages and Exiting (Benchmarking 100 packets)
             if valid_packet_count == 100:
                 avg_net = sum_net_transit / 100.0
                 
-                # Decryption Throughput (Mbps)
                 total_crypto_sum = metric_sums.get("sub_total_crypto_ms", 0.0)
                 crypto_time_sec = max(0.0001, total_crypto_sum / 1000.0)
                 throughput_mbps = (total_payload_bits / crypto_time_sec) / 1_000_000
@@ -79,7 +89,6 @@ def process_goose_frame(payload_bytes, crypto_provider, raw_packet_len):
                 print(f"  Avg Network Transit     : {avg_net:.5f} ms")
                 print(f"  -----------------------------------------")
                 
-                # Print dynamic sub-metrics
                 for key, total_val in metric_sums.items():
                     if key != "sub_total_crypto_ms":
                         formatted_name = key.replace('_', ' ').title()
@@ -91,8 +100,11 @@ def process_goose_frame(payload_bytes, crypto_provider, raw_packet_len):
                 print(f"[*] =========================================")
                 os._exit(0) 
 
-    except ValueError as ve: print(f"[*] SECURITY ALERT: {str(ve)}\n")
-    except Exception: pass 
+    except ValueError as ve:
+        # Catches both Cryptographic failures AND PyGoose parsing errors
+        print(f"[*] SECURITY/PARSE ALERT: {str(ve)}\n")
+    except Exception as e: 
+        pass 
 
 def start_subscriber(crypto_provider):
     algo_name = crypto_provider.get_algo_name() if crypto_provider else "NONE (Plaintext)"
@@ -104,7 +116,8 @@ def start_subscriber(crypto_provider):
     
     while True:
         raw_packet = sock.recv(2048)
-        process_goose_frame(raw_packet[14:], crypto_provider, len(raw_packet))
+        # We now pass the ENTIRE raw packet so we can extract the Eth Header inside the function
+        process_goose_frame(raw_packet, crypto_provider)
 
 def get_crypto_provider(algo_name):
     algo_name = algo_name.lower()

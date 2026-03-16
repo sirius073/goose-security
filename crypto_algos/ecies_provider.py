@@ -22,9 +22,9 @@ class ECIESProvider(CryptoProvider):
                 self.private_key = x25519.X25519PrivateKey.from_private_bytes(f.read())
 
     def get_algo_name(self) -> str:
-        return "ECIES (X25519 Asymmetric Encryption)"
+        return "ECIES (X25519 Asymmetric Encryption) (Byte Stream)"
 
-    def protect(self, raw_message: bytes) -> dict:
+    def protect(self, raw_message: bytes) -> tuple[bytes, dict]:
         t_start_total = time.perf_counter()
         
         # 1. Asymmetric Math & Key Derivation
@@ -50,28 +50,30 @@ class ECIESProvider(CryptoProvider):
 
         t_total_encrypt = (time.perf_counter() - t_start_total) * 1000
 
-        # We must send our temporary public key so the subscriber can do the reverse math
         ephemeral_pub_bytes = ephemeral_public_key.public_bytes(
             encoding=serialization.Encoding.Raw, format=serialization.PublicFormat.Raw
         )
-        payload = {
-            "algo": self.get_algo_name(),
-            "ephemeral_pub": ephemeral_pub_bytes.hex(),
-            "nonce": nonce.hex(),
-            "data": ciphertext.hex(),
-        }
+        
+        # ---------------------------------------------------------
+        # PURE BYTE STREAM: [PUB_KEY (32)] + [NONCE (12)] + [CIPHERTEXT]
+        # ---------------------------------------------------------
+        secure_stream = ephemeral_pub_bytes + nonce + ciphertext
+        
         metrics = {
             "pub_key_deriv_ms": t_key_math,
             "pub_nonce_ms": t_nonce,
             "pub_encrypt_ms": t_encrypt,
             "pub_total_crypto_ms": t_total_encrypt
         }
-        return payload, metrics
+        return secure_stream, metrics
 
-    def verify(self, payload: dict) -> tuple[bytes, dict]:
-        ephemeral_pub_bytes = bytes.fromhex(payload["ephemeral_pub"])
-        nonce = bytes.fromhex(payload["nonce"])
-        ciphertext = bytes.fromhex(payload["data"])
+    def verify(self, secure_stream: bytes) -> tuple[bytes, dict]:
+        # ---------------------------------------------------------
+        # SLICING: X25519 PubKey is 32 bytes, Nonce is 12 bytes
+        # ---------------------------------------------------------
+        ephemeral_pub_bytes = secure_stream[:32]
+        nonce = secure_stream[32:44]
+        ciphertext = secure_stream[44:]
         
         metrics = {}
         t_start_total = time.perf_counter()

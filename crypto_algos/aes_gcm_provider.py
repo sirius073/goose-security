@@ -11,9 +11,9 @@ class AESGCMProvider(CryptoProvider):
         self.nonce_tracker = NonceTracker()
 
     def get_algo_name(self) -> str:
-        return "AES-256-GCM (AEAD) + Dynamic Keys + Nonce Tracking"
+        return "AES-256-GCM (AEAD) + Dynamic Keys + Nonce Tracking (Byte Stream)"
 
-    def protect(self, raw_message: bytes) -> tuple[dict, dict]:
+    def protect(self, raw_message: bytes) -> tuple[bytes, dict]:
         """Publisher side: Generates salt/nonce, derives key, encrypts, and measures time."""
         t_start_total = time.perf_counter()
         
@@ -39,13 +39,11 @@ class AESGCMProvider(CryptoProvider):
         
         t_total_crypto = (time.perf_counter() - t_start_total) * 1000
         
-        # Lean Network Payload
-        payload = {
-            "algo": self.get_algo_name(),
-            "salt": salt.hex(),
-            "nonce": nonce.hex(),
-            "data": ciphertext.hex(),
-        }
+        # ---------------------------------------------------------
+        # THE CHANGE: Pure Byte Stream instead of a JSON dictionary
+        # Structure: [SALT (32 bytes)] + [NONCE (12 bytes)] + [CIPHERTEXT + TAG]
+        # ---------------------------------------------------------
+        secure_stream = salt + nonce + ciphertext
         
         # Local Metrics (Not sent over the network)
         metrics = {
@@ -54,13 +52,17 @@ class AESGCMProvider(CryptoProvider):
             "pub_encrypt_ms": t_encrypt,
             "pub_total_crypto_ms": t_total_crypto
         }
-        return payload, metrics
+        return secure_stream, metrics
 
-    def verify(self, payload: dict) -> tuple[bytes, dict]:
+    def verify(self, secure_stream: bytes) -> tuple[bytes, dict]:
         """Subscriber side: Verifies nonce, derives key, authenticates MAC, decrypts."""
-        salt = bytes.fromhex(payload["salt"])
-        nonce = bytes.fromhex(payload["nonce"])
-        ciphertext = bytes.fromhex(payload["data"])
+        
+        # ---------------------------------------------------------
+        # THE CHANGE: Byte slicing based on known fixed lengths
+        # ---------------------------------------------------------
+        salt = secure_stream[:32]
+        nonce = secure_stream[32:44]
+        ciphertext = secure_stream[44:]
         
         metrics = {}
         t_start_total = time.perf_counter()

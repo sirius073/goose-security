@@ -11,9 +11,9 @@ class ChaCha20Provider(CryptoProvider):
         self.nonce_tracker = NonceTracker()
 
     def get_algo_name(self) -> str:
-        return "ChaCha20-Poly1305 (AEAD) + Dynamic Keys + Nonce Tracking"
+        return "ChaCha20-Poly1305 (AEAD) + Dynamic Keys + Nonce Tracking (Byte Stream)"
 
-    def protect(self, raw_message: bytes) -> dict:
+    def protect(self, raw_message: bytes) -> tuple[bytes, dict]:
         """Publisher side: Generates salt/nonce, derives key, encrypts, and measures time."""
         t_start_total = time.perf_counter()
         
@@ -35,25 +35,29 @@ class ChaCha20Provider(CryptoProvider):
         t_encrypt = (time.perf_counter() - t2) * 1000
         
         t_total_crypto = (time.perf_counter() - t_start_total) * 1000
-        payload = {
-            "algo": self.get_algo_name(),
-            "salt": salt.hex(),
-            "nonce": nonce.hex(),
-            "data": ciphertext.hex(),
-        }
+        
+        # ---------------------------------------------------------
+        # PURE BYTE STREAM: [SALT (32)] + [NONCE (12)] + [CIPHERTEXT + TAG]
+        # ---------------------------------------------------------
+        secure_stream = salt + nonce + ciphertext
+        
         metrics = {
             "pub_key_deriv_ms": t_key_gen,
             "pub_nonce_ms": t_nonce,
             "pub_encrypt_ms": t_encrypt,
             "pub_total_crypto_ms": t_total_crypto
         }
-        return payload, metrics
+        return secure_stream, metrics
 
-    def verify(self, payload: dict) -> tuple[bytes, dict]:
+    def verify(self, secure_stream: bytes) -> tuple[bytes, dict]:
         """Subscriber side: Verifies nonce, derives key, authenticates MAC, decrypts."""
-        salt = bytes.fromhex(payload["salt"])
-        nonce = bytes.fromhex(payload["nonce"])
-        ciphertext = bytes.fromhex(payload["data"])
+        
+        # ---------------------------------------------------------
+        # SLICING: ChaCha20 uses a 12-byte nonce, so offset is 32 -> 44
+        # ---------------------------------------------------------
+        salt = secure_stream[:32]
+        nonce = secure_stream[32:44]
+        ciphertext = secure_stream[44:]
         
         metrics = {}
         t_start_total = time.perf_counter()
@@ -79,8 +83,6 @@ class ChaCha20Provider(CryptoProvider):
             raise ValueError("Data Tampering Detected! Poly1305 MAC verification failed.")
             
         metrics["sub_decrypt_ms"] = (time.perf_counter() - t2) * 1000
-
-        # Calculate Total Cryptographic Latency (Must be low to meet 10ms GOOSE standard)
         metrics["sub_total_crypto_ms"] = (time.perf_counter() - t_start_total) * 1000
 
         return raw_message, metrics

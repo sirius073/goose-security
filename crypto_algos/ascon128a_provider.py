@@ -10,9 +10,9 @@ class Ascon128aProvider(CryptoProvider):
         self.nonce_tracker = NonceTracker()
 
     def get_algo_name(self) -> str:
-        return "ASCON-128a (NIST LWC Winner)"
+        return "ASCON-128a (NIST LWC Winner) (Byte Stream)"
 
-    def protect(self, raw_message: bytes) -> dict:
+    def protect(self, raw_message: bytes) -> tuple[bytes, dict]:
         t_start_total = time.perf_counter()
         
         # 1. Salt Generation & Key Derivation
@@ -29,7 +29,6 @@ class Ascon128aProvider(CryptoProvider):
         
         # 3. ASCON Encryption
         t2 = time.perf_counter()
-        
         ciphertext = ascon.encrypt(
             dynamic_key, 
             nonce, 
@@ -38,27 +37,28 @@ class Ascon128aProvider(CryptoProvider):
             "Ascon-128a"
         )
         t_encrypt = (time.perf_counter() - t2) * 1000
-
         t_total_encrypt = (time.perf_counter() - t_start_total) * 1000
 
-        payload = {
-            "algo": self.get_algo_name(),
-            "salt": salt.hex(),
-            "nonce": nonce.hex(),
-            "data": ciphertext.hex()
-        }
+        # ---------------------------------------------------------
+        # PURE BYTE STREAM: [SALT (32)] + [NONCE (16)] + [CIPHERTEXT + TAG]
+        # ---------------------------------------------------------
+        secure_stream = salt + nonce + ciphertext
+
         metrics = {
             "pub_key_deriv_ms": t_key_deriv,
-                "pub_nonce_ms": t_nonce,
-                "pub_encrypt_ms": t_encrypt,
-                "pub_total_crypto_ms": t_total_encrypt
-            }
-        return payload, metrics
+            "pub_nonce_ms": t_nonce,
+            "pub_encrypt_ms": t_encrypt,
+            "pub_total_crypto_ms": t_total_encrypt
+        }
+        return secure_stream, metrics
 
-    def verify(self, payload: dict) -> tuple[bytes, dict]:
-        salt = bytes.fromhex(payload["salt"])
-        nonce = bytes.fromhex(payload["nonce"])
-        ciphertext = bytes.fromhex(payload["data"])
+    def verify(self, secure_stream: bytes) -> tuple[bytes, dict]:
+        # ---------------------------------------------------------
+        # SLICING: ASCON uses a 16-byte nonce, so offset is 32 -> 48
+        # ---------------------------------------------------------
+        salt = secure_stream[:32]
+        nonce = secure_stream[32:48]
+        ciphertext = secure_stream[48:]
         
         metrics = {}
         t_start_total = time.perf_counter()
@@ -77,7 +77,6 @@ class Ascon128aProvider(CryptoProvider):
         # 3. ASCON Decryption & Authentication
         t2 = time.perf_counter()
         try:
-            # FIX: Using ascon.decrypt
             raw_message = ascon.decrypt(
                 dynamic_key, 
                 nonce, 
@@ -85,6 +84,9 @@ class Ascon128aProvider(CryptoProvider):
                 ciphertext, 
                 "Ascon-128a"
             )
+            # Depending on the ASCON wrapper, it might return None on failure instead of raising
+            if raw_message is None:
+                raise ValueError("Data Tampering Detected! ASCON authentication failed.")
         except Exception:
             raise ValueError("Data Tampering Detected! ASCON authentication failed.")
             

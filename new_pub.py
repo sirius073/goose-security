@@ -19,7 +19,7 @@ parser.add_argument("--file", type=str, default="goose_armory.bin", help="Path t
 args = parser.parse_args()
 
 GOOSE_TYPE = 0x88B8
-IFACE = "h2-eth0" 
+IFACE = "h1-eth0" 
 
 def start_publisher(crypto_provider, payload_file_path):
     algo_name = crypto_provider.get_algo_name() if crypto_provider else "NONE (Plaintext)"

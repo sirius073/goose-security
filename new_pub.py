@@ -19,7 +19,7 @@ parser.add_argument("--file", type=str, default="goose_armory.bin", help="Path t
 args = parser.parse_args()
 
 GOOSE_TYPE = 0x88B8
-IFACE = "h1-eth0" 
+IFACE = "h2-eth0" 
 
 def start_publisher(crypto_provider, payload_file_path):
     algo_name = crypto_provider.get_algo_name() if crypto_provider else "NONE (Plaintext)"
@@ -36,56 +36,64 @@ def start_publisher(crypto_provider, payload_file_path):
     metric_sums = {}
     total_payload_bits = 0
     msg_count = 0
-
-    print(f"[*] Reading and transmitting messages from {payload_file_path}...\n")
+    overhead_calculated = False
 
     with open(payload_file_path, "rb") as f:
         while True:
-            # 1. Read the 8-byte metadata header you generated (!fI)
             meta_bytes = f.read(8)
             if not meta_bytes or len(meta_bytes) < 8:
-                break # EOF reached
+                break 
                 
             wait_for, pkt_len = struct.unpack("!fI", meta_bytes)
-            
-            # 2. Read the actual raw ASN.1 GOOSE packet
             raw_packet = f.read(pkt_len)
             if len(raw_packet) != pkt_len:
-                break # Malformed file or unexpected EOF
+                break 
             
-            # 3. Slice out the 14-byte Ethernet Header so it stays Plaintext
             eth_header = raw_packet[:14]
-            goose_payload = raw_packet[14:] # The APPID, Length, Reserved, and APDU
+            goose_payload = raw_packet[14:] 
             
-            # 4. Cryptographically protect ONLY the GOOSE payload
+            # 4. Protect the GOOSE payload
             if crypto_provider is None:
                 secure_stream = goose_payload
                 pub_metrics = {"pub_total_crypto_ms": 0.0}
+                overhead_bytes = 0
             else:
                 secure_stream, pub_metrics = crypto_provider.protect(goose_payload)
-                
-            # Pack timestamp for latency calculation
+                # Calculate Overhead: Difference between protected stream and original payload
+                # This doesn't include the 8-byte network timestamp we add later
+                overhead_bytes = len(secure_stream) - len(goose_payload)
+
+            # DISPLAY OVERHEAD ONCE (Before 1st Message)
+            if not overhead_calculated:
+                print(f"[*] =========================================")
+                print(f"[*] CRYPTOGRAPHIC OVERHEAD ANALYSIS")
+                print(f"[*] -----------------------------------------")
+                print(f"[*] Original Payload   : {len(goose_payload)} bytes")
+                print(f"[*] Crypto Metadata    : {overhead_bytes} bytes (Tags/Nonces/Salt)")
+                print(f"[*] Network Latency TS : 8 bytes")
+                print(f"[*] Total Added Bytes  : {overhead_bytes + 8} bytes")
+                print(f"[*] =========================================\n")
+                print(f"[*] Transmitting messages...\n")
+                overhead_calculated = True
+
+            # Pack timestamp for latency calculation (This happens AFTER crypto)
             timestamp_bytes = struct.pack("!d", time.time())
             
-            # 5. Assemble and Send: [Plaintext Eth] + [Timestamp] + [Encrypted Payload]
+            # 5. Assemble and Send
             packet = eth_header + timestamp_bytes + secure_stream
             sock.send(packet)
             
             msg_count += 1
             
-            # 6. Dynamically Accumulate Metrics (Skip 1st warmup packet)
             if msg_count > 1:
                 for key, val in pub_metrics.items():
                     metric_sums[key] = metric_sums.get(key, 0.0) + val
-                
                 total_payload_bits += (len(packet) * 8)
                 
                 if msg_count % 20 == 0:
                     tot_ms = pub_metrics.get("pub_total_crypto_ms", 0.0)
                     print(f"[*] Sent {msg_count} packets | Last Payload Gen: {tot_ms:.4f}ms")
             
-            # 7. Sleep for the generated wait time (converting microseconds to seconds)
-            # Your `wait_for` is in microseconds (e.g. 2 * 1e3 = 2000us = 2ms)
             if wait_for > 0:
                 time.sleep(wait_for / 1_000_000.0)
 
@@ -99,12 +107,10 @@ def start_publisher(crypto_provider, payload_file_path):
     print(f"[*] PUBLISHER METRICS ({valid_count} Message Average)")
     print(f"[*] Algorithm: {algo_name}")
     print(f"[*] =========================================")
-    
     for key, total_val in metric_sums.items():
         if key != "pub_total_crypto_ms":
             formatted_name = key.replace('_', ' ').title()
             print(f"  Avg {formatted_name.ljust(22)}: {(total_val / valid_count):.5f} ms")
-            
     print(f"  -----------------------------------------")
     print(f"  Total Avg Payload Gen   : {(total_crypto_sum / valid_count):.5f} ms")
     print(f"  Processing Throughput   : {throughput_mbps:.2f} Mbps")
@@ -122,7 +128,6 @@ def get_crypto_provider(algo_name):
         print(f"Error: {key_path} missing.")
         exit(1)
     with open(key_path, "rb") as f: master_shared_key = f.read()
-        
     if algo_name == "chacha": return ChaCha20Provider(master_shared_key)
     elif algo_name == "ascon": return Ascon128aProvider(master_shared_key)
     elif algo_name == "aesgcm": return AESGCMProvider(master_shared_key)

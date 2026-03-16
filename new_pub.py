@@ -63,7 +63,7 @@ def start_publisher(crypto_provider):
             pub_crypto_ms = pub_metrics["pub_total_crypto_ms"]
         
         # 2. Add Wire Timestamp for Network Transit calculation
-        #network_payload["wire_send_timestamp"] = time.time()
+        network_payload["wire_send_timestamp"] = time.time()
         
         # 3. Send the LEAN payload
         frame_data = json.dumps(network_payload).encode('utf-8')

@@ -40,9 +40,9 @@ def process_goose_frame(payload_bytes, crypto_provider):
     
     try:
         payload = json.loads(raw_payload)
-        #send_timestamp = payload.get("wire_send_timestamp", wire_recv_timestamp)
-        #t_net = (wire_recv_timestamp - send_timestamp) * 1000
-        #t_net = max(0.0001, t_net) # Prevent 0.0ms anomalies
+        send_timestamp = payload.get("wire_send_timestamp", wire_recv_timestamp)
+        t_net = (wire_recv_timestamp - send_timestamp) * 1000
+        t_net = max(0.0001, t_net) # Prevent 0.0ms anomalies
         
         # 1. Cryptographic Verification
         if crypto_provider is None or payload.get("algo") == "None (Plaintext)":
@@ -59,15 +59,15 @@ def process_goose_frame(payload_bytes, crypto_provider):
         if sq_num > 1: # Ignore warmup packet
             valid_packet_count += 1
             total_sub_crypto_time += sub_crypto_ms
-            #total_network_transit_time += t_net
-            #csv_writer.writerow([sq_num, trip_cmd, t_net, sub_crypto_ms])
+            total_network_transit_time += t_net
+            csv_writer.writerow([sq_num, trip_cmd, t_net, sub_crypto_ms])
             
             if valid_packet_count == 100:
                 avg_sub = total_sub_crypto_time / 100.0
                 avg_net = total_network_transit_time / 100.0
                 print(f"[*] Received 100 valid messages. Test complete.")
                 print(f"  =========================================")
-                #print(f"  Avg Network Transit Time : {avg_net:.5f} ms")
+                print(f"  Avg Network Transit Time : {avg_net:.5f} ms")
                 print(f"  Avg Decryption Time      : {avg_sub:.5f} ms")
                 print(f"  =========================================\n")
                 print(f"  NOTE: To get TRUE End-to-End Latency, add the Publisher's")

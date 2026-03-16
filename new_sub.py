@@ -5,9 +5,6 @@ import argparse
 import socket
 import struct
 
-# --- Import your PyGoose unpacker ---
-from goose import unpack_goose 
-
 # ---------------------------------------------------------------------------
 from crypto_algos.chacha20_provider import ChaCha20Provider
 from crypto_algos.ascon128a_provider import Ascon128aProvider
@@ -24,13 +21,14 @@ GOOSE_TYPE = 0x88B8
 IFACE = "h2-eth0" 
 
 # DYNAMIC TRACKING
+total_rx_count = 0  # Replaces the PyGoose sq_num extraction
 valid_packet_count = 0
 sum_net_transit = 0.0
 total_payload_bits = 0
 metric_sums = {}
 
 def process_goose_frame(raw_packet, crypto_provider):
-    global valid_packet_count, sum_net_transit, total_payload_bits, metric_sums
+    global total_rx_count, valid_packet_count, sum_net_transit, total_payload_bits, metric_sums
     
     wire_recv_timestamp = time.time()
     
@@ -53,13 +51,14 @@ def process_goose_frame(raw_packet, crypto_provider):
         else:
             raw_goose_payload, sub_metrics = crypto_provider.verify(secure_stream)
 
-        # 3. Reconstruct the full Layer 2 frame and parse it
-        # We stitch the plaintext MAC addresses back onto the decrypted GOOSE body
+        # 3. Reconstruct the full Layer 2 frame (Ready for PyGoose later!)
         full_frame = eth_header + raw_goose_payload
-        goose_data = unpack_goose(full_frame)
-        sq_num = goose_data.sq_num
         
-        # 4. Dynamically Accumulate Metrics (Skip warmup packet where sq_num == 0 or 1)
+        # We manually increment our mock sequence number instead of parsing ASN.1
+        total_rx_count += 1
+        sq_num = total_rx_count
+        
+        # 4. Dynamically Accumulate Metrics (Skip warmup packet where sq_num == 1)
         if sq_num > 1: 
             valid_packet_count += 1
             sum_net_transit += t_net
@@ -70,7 +69,7 @@ def process_goose_frame(raw_packet, crypto_provider):
             
             if valid_packet_count % 20 == 0:
                 tot_ms = sub_metrics.get("sub_total_crypto_ms", 0.0)
-                print(f"[*] Recv {valid_packet_count}/100 | Transit: {t_net:.4f}ms | Sub Crypto: {tot_ms:.4f}ms | SqNum: {sq_num}")
+                print(f"[*] Recv {valid_packet_count}/100 | Transit: {t_net:.4f}ms | Sub Crypto: {tot_ms:.4f}ms | Mock SqNum: {sq_num}")
             
             # 5. Final Averages and Exiting (Benchmarking 100 packets)
             if valid_packet_count == 100:
@@ -101,8 +100,8 @@ def process_goose_frame(raw_packet, crypto_provider):
                 os._exit(0) 
 
     except ValueError as ve:
-        # Catches both Cryptographic failures AND PyGoose parsing errors
-        print(f"[*] SECURITY/PARSE ALERT: {str(ve)}\n")
+        # Catches Cryptographic failures
+        print(f"[*] SECURITY ALERT: {str(ve)}\n")
     except Exception as e: 
         pass 
 
@@ -116,7 +115,6 @@ def start_subscriber(crypto_provider):
     
     while True:
         raw_packet = sock.recv(2048)
-        # We now pass the ENTIRE raw packet so we can extract the Eth Header inside the function
         process_goose_frame(raw_packet, crypto_provider)
 
 def get_crypto_provider(algo_name):

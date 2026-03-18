@@ -7,7 +7,8 @@ import socket
 import struct
 import csv
 import resource
-import json      # <--- ADDED FOR DETAILED METRICS
+import json      
+import tracemalloc  # <--- ADDED FOR MEMORY METRICS
 
 # ---------------------------------------------------------------------------
 from crypto_algos.chacha20_provider import ChaCha20Provider
@@ -45,7 +46,6 @@ def write_csv_header_if_needed(csv_path):
     if not os.path.exists(csv_path):
         with open(csv_path, "w", newline="") as cf:
             writer = csv.writer(cf)
-            # Added "detailed_metrics" at the end
             writer.writerow(["ts","direction","algo","msg_index","net_transit_ms","crypto_ms",
                              "payload_bytes","overhead_bytes","throughput_mbps","mem_kb","message_text", "detailed_metrics"])
 
@@ -54,7 +54,6 @@ def process_goose_frame(raw_packet, crypto_provider, csv_path):
 
     wire_recv_timestamp = time.time()
 
-    # Needs 14 (Eth Header) + 8 (Timestamp) = 22 bytes minimum
     if len(raw_packet) < 22:
         return
 
@@ -71,9 +70,25 @@ def process_goose_frame(raw_packet, crypto_provider, csv_path):
         # 2. Cryptographic Verification & Authentication
         if crypto_provider is None:
             raw_goose_payload = secure_stream
-            sub_metrics = {"sub_total_crypto_ms": 0.0}
+            sub_metrics = {"sub_total_crypto_ms": 0.0, "sub_cpu_process_ms": 0.0, "sub_peak_memory_bytes": 0}
         else:
+            # --- START MEASUREMENT ---
+            tracemalloc.start()
+            cpu_start = time.process_time_ns()
+
             raw_goose_payload, sub_metrics = crypto_provider.verify(secure_stream)
+
+            # --- STOP MEASUREMENT ---
+            cpu_end = time.process_time_ns()
+            current_mem, peak_mem = tracemalloc.get_traced_memory()
+            tracemalloc.stop()
+
+            # Convert nanoseconds to milliseconds
+            cpu_process_ms = (cpu_end - cpu_start) / 1_000_000.0
+            
+            # Add to metrics dictionary
+            sub_metrics["sub_cpu_process_ms"] = cpu_process_ms
+            sub_metrics["sub_peak_memory_bytes"] = peak_mem
 
         # 3. Reconstruct the full Layer 2 frame (Ready for PyGoose later)
         full_frame = eth_header + raw_goose_payload
@@ -90,27 +105,21 @@ def process_goose_frame(raw_packet, crypto_provider, csv_path):
             for key, val in sub_metrics.items():
                 metric_sums[key] = metric_sums.get(key, 0.0) + val
 
-            # extract printable text (best-effort)
             try:
                 printable = ''.join([c if c.isprintable() else '.' for c in raw_goose_payload.decode('ascii', errors='ignore')])
                 printable = printable[:200]
             except Exception:
                 printable = ""
 
-            # compute throughput sample using sub crypto time
             crypto_ms = sub_metrics.get("sub_total_crypto_ms", 0.0)
             crypto_time_sec = max(0.0001, crypto_ms / 1000.0)
             throughput_mbps = ((len(raw_packet) * 8) / crypto_time_sec) / 1_000_000 if crypto_ms > 0 else 0.0
 
             mem_kb = cur_mem_kb()
-
-            # no reliable overhead_bytes on subscriber side (publisher is authoritative).
             overhead_bytes = ""
 
-            # append to CSV
             with open(csv_path, "a", newline="") as cf:
                 csvw = csv.writer(cf)
-                # Added json.dumps(sub_metrics) here
                 csvw.writerow([time.time(), "subscriber", crypto_provider.get_algo_name() if crypto_provider else "NONE (Plaintext)",
                                valid_packet_count, f"{t_net:.4f}", f"{crypto_ms:.4f}", len(raw_goose_payload),
                                overhead_bytes, f"{throughput_mbps:.4f}", f"{mem_kb:.1f}", printable, json.dumps(sub_metrics)])
@@ -138,7 +147,7 @@ def process_goose_frame(raw_packet, crypto_provider, csv_path):
                 for key, total_val in metric_sums.items():
                     if key != "sub_total_crypto_ms":
                         formatted_name = key.replace('_', ' ').title()
-                        print(f"  Avg {formatted_name.ljust(22)}: {(total_val / 100.0):.5f} ms")
+                        print(f"  Avg {formatted_name.ljust(22)}: {(total_val / 100.0):.5f} ms/bytes")
 
                 print(f"  -----------------------------------------")
                 print(f"  Total Avg Sub Crypto    : {(total_crypto_sum / 100.0):.5f} ms")
@@ -147,7 +156,6 @@ def process_goose_frame(raw_packet, crypto_provider, csv_path):
                 os._exit(0)
 
     except ValueError as ve:
-        # --- FAIL-SECURE PROTOCOL TRIGGERED ---
         error_msg = str(ve)
         print(f"\n[!!!] CRITICAL SECURITY ALERT | Packet Attempt #{total_attempts} [!!!]")
 
@@ -163,12 +171,9 @@ def process_goose_frame(raw_packet, crypto_provider, csv_path):
 
         print(f"    [STAT] Packets Validated Before Attack: {valid_packet_count}")
         print(f"\n[!] INITIATING FAIL-SECURE LOCKDOWN. HALTING RECEPTION.\n")
-
-        # Stop listening and kill the subscriber immediately
         os._exit(1)
 
     except Exception as e:
-        # Catch non-crypto errors silently so the network loop doesn't break on garbage bytes
         pass
 
 def start_subscriber(crypto_provider, csv_path):

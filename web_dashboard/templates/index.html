@@ -52,7 +52,10 @@
             <h3>Publisher (Sender)</h3>
             <div class="metric"><span>Total Payload Gen Time:</span> <span class="metric-value">{{ stats.pub_avg_crypto_ms }} ms</span></div>
             {% for key, val in stats.pub_detailed_avgs.items() %}
-                <div class="metric sub-metric"><span>Avg {{ key }}:</span> <span>{{ val }} ms</span></div>
+                <div class="metric sub-metric">
+                    <span>Avg {{ key }}:</span> 
+                    <span>{{ val }} {% if 'Memory' in key or 'Bytes' in key %}bytes{% else %}ms{% endif %}</span>
+                </div>
             {% endfor %}
             <div class="metric" style="margin-top: 15px;"><span>Throughput:</span> <span class="metric-value">{{ stats.pub_avg_throughput }} Mbps</span></div>
         </div>
@@ -61,14 +64,17 @@
             <div class="metric"><span>Avg Network Transit:</span> <span class="metric-value">{{ stats.sub_avg_net_ms }} ms</span></div>
             <div class="metric"><span>Total Verification Time:</span> <span class="metric-value">{{ stats.sub_avg_crypto_ms }} ms</span></div>
             {% for key, val in stats.sub_detailed_avgs.items() %}
-                <div class="metric sub-metric"><span>Avg {{ key }}:</span> <span>{{ val }} ms</span></div>
+                <div class="metric sub-metric">
+                    <span>Avg {{ key }}:</span> 
+                    <span>{{ val }} {% if 'Memory' in key or 'Bytes' in key %}bytes{% else %}ms{% endif %}</span>
+                </div>
             {% endfor %}
             <div class="metric" style="margin-top: 15px;"><span>Throughput:</span> <span class="metric-value">{{ stats.sub_avg_throughput }} Mbps</span></div>
         </div>
     </div>
 
     <div class="card">
-        <h3>Live Processing Timeline (Detailed)</h3>
+        <h3>Live Latency Timeline (Memory allocation hidden for scale)</h3>
         <canvas id="metricsChart"></canvas>
     </div>
     {% else %}
@@ -102,7 +108,7 @@
             const labels = chartData.map(d => `Msg ${d.msg_index}`);
             const datasets = [];
 
-            // 1. Add the new Total E2E Line (Thick Green Line)
+            // 1. Total E2E Line
             datasets.push({
                 label: 'Total E2E Latency (ms)',
                 data: chartData.map(d => d.e2e_time_ms || 0),
@@ -116,12 +122,15 @@
                 borderColor: '#f1c40f', backgroundColor: '#f1c40f', tension: 0.3, borderWidth: 2, pointRadius: 1
             });
 
-            // 3. Dynamically add Publisher details
+            // 3. Dynamically add Publisher details (FILTERING OUT MEMORY)
             const pubColors = ['#3498db', '#2980b9', '#74b9ff'];
             let cIdx = 0;
             const firstPub = chartData.find(d => Object.keys(d.pub_details || {}).length > 0);
             if(firstPub) {
                 Object.keys(firstPub.pub_details).forEach(key => {
+                    // Do not plot bytes on a millisecond graph!
+                    if(key.toLowerCase().includes('memory') || key.toLowerCase().includes('bytes')) return; 
+
                     datasets.push({
                         label: `Pub: ${key.replace(/_/g, ' ')}`,
                         data: chartData.map(d => (d.pub_details && d.pub_details[key]) ? d.pub_details[key] : 0),
@@ -133,12 +142,15 @@
                 });
             }
 
-            // 4. Dynamically add Subscriber details
+            // 4. Dynamically add Subscriber details (FILTERING OUT MEMORY)
             const subColors = ['#e74c3c', '#c0392b', '#ff7675'];
             cIdx = 0;
             const firstSub = chartData.find(d => Object.keys(d.sub_details || {}).length > 0);
             if(firstSub) {
                 Object.keys(firstSub.sub_details).forEach(key => {
+                    // Do not plot bytes on a millisecond graph!
+                    if(key.toLowerCase().includes('memory') || key.toLowerCase().includes('bytes')) return;
+
                     datasets.push({
                         label: `Sub: ${key.replace(/_/g, ' ')}`,
                         data: chartData.map(d => (d.sub_details && d.sub_details[key]) ? d.sub_details[key] : 0),

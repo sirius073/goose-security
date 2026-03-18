@@ -93,8 +93,9 @@ def get_aggregated_metrics():
         else:
             data['e2e_time_ms'] = 0.0
 
-    pub_detailed_avgs = {k.replace('_', ' ').title(): round(safe_avg(v), 5) for k, v in pub_details_raw.items()}
-    sub_detailed_avgs = {k.replace('_', ' ').title(): round(safe_avg(v), 5) for k, v in sub_details_raw.items()}
+    # Dynamic format: limits rounding to 4 decimals for time, keeps whole numbers for bytes
+    pub_detailed_avgs = {k.replace('_', ' ').title(): round(safe_avg(v), 4) for k, v in pub_details_raw.items()}
+    sub_detailed_avgs = {k.replace('_', ' ').title(): round(safe_avg(v), 4) for k, v in sub_details_raw.items()}
 
     stats = {
         "algo": last_algo.upper(),
@@ -106,7 +107,7 @@ def get_aggregated_metrics():
         "sub_avg_crypto_ms": round(safe_avg(sub_crypto_times), 4),
         "sub_avg_throughput": round(safe_avg(sub_throughput), 2),
         "sub_detailed_avgs": sub_detailed_avgs,
-        "avg_e2e_ms": round(safe_avg(e2e_times), 4),  # <--- NEW E2E METRIC
+        "avg_e2e_ms": round(safe_avg(e2e_times), 4),
         "total_packets_analyzed": len(sub_crypto_times)
     }
 

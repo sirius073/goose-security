@@ -1,13 +1,14 @@
-import os
 import time
+import os
 from cryptography.hazmat.primitives.asymmetric import ed25519
 from .base_provider import CryptoProvider
-from .security_utils import NonceTracker
+from .security_utils import GooseReplayTracker, extract_goose_state_numbers
 
 class Ed25519Provider(CryptoProvider):
     def __init__(self, role: str):
         self.role = role
-        self.nonce_tracker = NonceTracker()
+        self.replay_tracker = GooseReplayTracker()
+        self.boot_id = os.urandom(4)
         
         if self.role == "publisher":
             key_path = "keys/publisher_private.bin"
@@ -26,7 +27,7 @@ class Ed25519Provider(CryptoProvider):
             raise ValueError("Role must be 'publisher' or 'subscriber'")
 
     def get_algo_name(self) -> str:
-        return "Ed25519 Digital Signature + Nonce Tracking (Byte Stream)"
+        return "Ed25519 Digital Signature + GOOSE Nonce Tracking (Byte Stream)"
 
     def protect(self, raw_message: bytes) -> tuple[bytes, dict]:
         if self.role != "publisher":
@@ -34,10 +35,9 @@ class Ed25519Provider(CryptoProvider):
             
         t_start_total = time.perf_counter()
 
-        # 1. Generate unique nonce
-        t0 = time.perf_counter()
-        nonce = os.urandom(16)
-        t_nonce = (time.perf_counter() - t0) * 1000
+        # 1. Build nonce [BootID|stNum|sqNum] from GOOSE payload
+        st_num, sq_num = extract_goose_state_numbers(raw_message)
+        nonce = self.boot_id + st_num.to_bytes(4, "big") + sq_num.to_bytes(4, "big")
         
         # 2. Cryptographic Binding (Sign the message AND the nonce together)
         data_to_sign = raw_message + nonce
@@ -50,12 +50,11 @@ class Ed25519Provider(CryptoProvider):
         t_total_crypto = (time.perf_counter() - t_start_total) * 1000
 
         # ---------------------------------------------------------
-        # PURE BYTE STREAM: [NONCE (16)] + [SIGNATURE (64)] + [PLAINTEXT]
+        # PURE BYTE STREAM: [NONCE (12)] + [SIGNATURE (64)] + [PLAINTEXT]
         # ---------------------------------------------------------
         secure_stream = nonce + signature + raw_message
         
         metrics = {
-            "pub_nonce_ms": t_nonce,
             "pub_sign_ms": t_sign,
             "pub_total_crypto_ms": t_total_crypto
         }
@@ -66,22 +65,27 @@ class Ed25519Provider(CryptoProvider):
             raise PermissionError("Only the subscriber can verify messages in this setup.")
 
         # ---------------------------------------------------------
-        # SLICING: Ed25519 Nonce is 16 bytes, Signature is exactly 64 bytes
+        # SLICING: Nonce is 12 bytes, Signature is exactly 64 bytes
         # ---------------------------------------------------------
-        nonce = secure_stream[:16]
-        signature = secure_stream[16:80]
-        raw_message = secure_stream[80:]
+        nonce = secure_stream[:12]
+        boot_id = nonce[:4]
+        st_num = int.from_bytes(nonce[4:8], "big")
+        sq_num = int.from_bytes(nonce[8:12], "big")
+        signature = secure_stream[12:76]
+        raw_message = secure_stream[76:]
         
         data_to_verify = raw_message + nonce
         metrics = {}
         
         t_start_total = time.perf_counter()
 
-        # 1. Nonce Tracking (O(1) Replay Protection)
+        # 1. Replay Tracking (Boot ID + stNum + sqNum)
         t0 = time.perf_counter()
-        if not self.nonce_tracker.check_and_add(nonce):
-            raise ValueError("Replay Attack Detected! This exact message was already processed.")
-        metrics["sub_nonce_check_ms"] = (time.perf_counter() - t0) * 1000
+        if not self.replay_tracker.is_acceptable(boot_id, st_num, sq_num):
+            raise ValueError(
+                f"Replay Attack! boot_id={boot_id.hex()} stNum={st_num} sqNum={sq_num}"
+            )
+        metrics["sub_replay_check_ms"] = (time.perf_counter() - t0) * 1000
 
         # 2. Signature Authentication
         t1 = time.perf_counter()
@@ -90,6 +94,8 @@ class Ed25519Provider(CryptoProvider):
             metrics["sub_verify_ms"] = (time.perf_counter() - t1) * 1000
         except Exception:
             raise ValueError("Digital Signature Invalid! Message tampered or source unverified.")
+
+        self.replay_tracker.commit(boot_id, st_num, sq_num)
 
         metrics["sub_total_crypto_ms"] = (time.perf_counter() - t_start_total) * 1000
         

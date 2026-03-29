@@ -105,7 +105,7 @@ def process_goose_frame(raw_packet, crypto_provider):
         
         if "Replay" in error_msg:
             print(f"    [TYPE] Anti-Replay Violation")
-            print(f"    [INFO] Nonce already exists in Subscriber memory. Duplicate dropped.")
+            print(f"    [INFO] Nonce fields (Boot ID, stNum, sqNum) indicate replay/out-of-order packet.")
         elif "Tampering" in error_msg or "Signature" in error_msg or "authentication failed" in error_msg:
             print(f"    [TYPE] Integrity/Authentication Violation")
             print(f"    [INFO] Cryptographic Tag/Signature mismatch. Payload has been modified!")

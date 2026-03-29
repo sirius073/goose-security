@@ -4,7 +4,7 @@ import ctypes
 import importlib
 from ctypes import POINTER, byref, c_int, c_ubyte, c_ulonglong
 from .base_provider import CryptoProvider
-from .security_utils import NonceTracker, DynamicKeyManager
+from .security_utils import GooseReplayTracker, extract_goose_state_numbers
 
 try:
     _ascon_py = importlib.import_module("ascon")
@@ -183,8 +183,9 @@ class _AsconPyLib:
 
 class Ascon128aProvider(CryptoProvider):
     def __init__(self, master_shared_key: bytes, backend: str | None = None):
-        self.key_manager = DynamicKeyManager(master_shared_key)
-        self.nonce_tracker = NonceTracker()
+        self.master_shared_key = master_shared_key[:16]
+        self.replay_tracker = GooseReplayTracker()
+        self.boot_id = os.urandom(4)
         selected_backend = (backend or os.getenv("ASCON_BACKEND", "python")).strip().lower()
 
         if selected_backend in {"python", "py", "legacy"}:
@@ -200,38 +201,28 @@ class Ascon128aProvider(CryptoProvider):
 
     def get_algo_name(self) -> str:
         if self._backend_name == "python":
-            return "ASCON-128a (Python ascon) (Byte Stream)"
-        return "ASCON-128a (ascon-c) (Byte Stream)"
+            return "ASCON-128a (Python ascon) + GOOSE Nonce (Byte Stream)"
+        return "ASCON-128a (ascon-c) + GOOSE Nonce (Byte Stream)"
 
     def protect(self, raw_message: bytes) -> tuple[bytes, dict]:
         t_start_total = time.perf_counter()
         
-        # 1. Salt Generation & Key Derivation
-        t0 = time.perf_counter()
-        salt = os.urandom(32)
-        # ASCON-128a uses 128-bit keys (16 bytes)
-        dynamic_key = self.key_manager.derive_key(salt)[:16] 
-        t_key_deriv = (time.perf_counter() - t0) * 1000
-
-        # 2. Nonce Generation
-        t1 = time.perf_counter()
-        nonce = os.urandom(16) 
-        t_nonce = (time.perf_counter() - t1) * 1000
+        st_num, sq_num = extract_goose_state_numbers(raw_message)
+        nonce12 = self.boot_id + st_num.to_bytes(4, "big") + sq_num.to_bytes(4, "big")
+        nonce16 = nonce12 + b"\x00\x00\x00\x00"
         
         # 3. ASCON Encryption
         t2 = time.perf_counter()
-        ciphertext = self._ascon.encrypt(dynamic_key, nonce, b"", raw_message)
+        ciphertext = self._ascon.encrypt(self.master_shared_key, nonce16, nonce12, raw_message)
         t_encrypt = (time.perf_counter() - t2) * 1000
         t_total_encrypt = (time.perf_counter() - t_start_total) * 1000
 
         # ---------------------------------------------------------
-        # PURE BYTE STREAM: [SALT (32)] + [NONCE (16)] + [CIPHERTEXT + TAG]
+        # PURE BYTE STREAM: [NONCE (12)] + [CIPHERTEXT + TAG]
         # ---------------------------------------------------------
-        secure_stream = salt + nonce + ciphertext
+        secure_stream = nonce12 + ciphertext
 
         metrics = {
-            "pub_key_deriv_ms": t_key_deriv,
-            "pub_nonce_ms": t_nonce,
             "pub_encrypt_ms": t_encrypt,
             "pub_total_crypto_ms": t_total_encrypt
         }
@@ -239,32 +230,34 @@ class Ascon128aProvider(CryptoProvider):
 
     def verify(self, secure_stream: bytes) -> tuple[bytes, dict]:
         # ---------------------------------------------------------
-        # SLICING: ASCON uses a 16-byte nonce, so offset is 32 -> 48
+        # SLICING: [NONCE (12)] + [CIPHERTEXT + TAG]
         # ---------------------------------------------------------
-        salt = secure_stream[:32]
-        nonce = secure_stream[32:48]
-        ciphertext = secure_stream[48:]
+        nonce12 = secure_stream[:12]
+        ciphertext = secure_stream[12:]
+        boot_id = nonce12[:4]
+        st_num = int.from_bytes(nonce12[4:8], "big")
+        sq_num = int.from_bytes(nonce12[8:12], "big")
+        nonce16 = nonce12 + b"\x00\x00\x00\x00"
         
         metrics = {}
         t_start_total = time.perf_counter()
 
-        # 1. Replay Attack / Nonce Check
+        # 1. Replay Attack / sqNum Check (boot_id, stNum aware)
         t0 = time.perf_counter()
-        if not self.nonce_tracker.check_and_add(nonce):
-            raise ValueError("Replay Attack Detected!")
-        metrics["sub_nonce_check_ms"] = (time.perf_counter() - t0) * 1000
+        if not self.replay_tracker.is_acceptable(boot_id, st_num, sq_num):
+            raise ValueError(
+                f"Replay Attack! boot_id={boot_id.hex()} stNum={st_num} sqNum={sq_num}"
+            )
+        metrics["sub_replay_check_ms"] = (time.perf_counter() - t0) * 1000
 
-        # 2. Key Derivation
-        t1 = time.perf_counter()
-        dynamic_key = self.key_manager.derive_key(salt)[:16]
-        metrics["sub_key_deriv_ms"] = (time.perf_counter() - t1) * 1000
-
-        # 3. ASCON Decryption & Authentication
+        # 2. ASCON Decryption & Authentication
         t2 = time.perf_counter()
         try:
-            raw_message = self._ascon.decrypt(dynamic_key, nonce, b"", ciphertext)
+            raw_message = self._ascon.decrypt(self.master_shared_key, nonce16, nonce12, ciphertext)
         except Exception:
             raise ValueError("Data Tampering Detected! ASCON authentication failed.")
+
+        self.replay_tracker.commit(boot_id, st_num, sq_num)
             
         metrics["sub_decrypt_ms"] = (time.perf_counter() - t2) * 1000
         metrics["sub_total_crypto_ms"] = (time.perf_counter() - t_start_total) * 1000

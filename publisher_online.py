@@ -108,7 +108,7 @@ def start_publisher(crypto_provider, msg_count_target, csv_path):
                 print(f"[*] CRYPTOGRAPHIC OVERHEAD ANALYSIS")
                 print(f"[*] -----------------------------------------")
                 print(f"[*] Original Payload   : {len(goose_payload)} bytes")
-                print(f"[*] Crypto Metadata    : {overhead_bytes} bytes (Tags/Nonces/Salt)")
+                print(f"[*] Crypto Metadata    : {overhead_bytes} bytes (Tag + Nonce[BootID|stNum|sqNum])")
                 print(f"[*] Network Latency TS : 8 bytes")
                 print(f"[*] Total Added Bytes  : {overhead_bytes + 8} bytes")
                 print(f"[*] =========================================\n")

@@ -2,90 +2,76 @@ import os
 import time
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from .base_provider import CryptoProvider
-from .security_utils import NonceTracker, DynamicKeyManager
+from .security_utils import GooseReplayTracker, extract_goose_state_numbers
 
 class AESGCMProvider(CryptoProvider):
     def __init__(self, master_shared_key: bytes):
-        # Initialize the decoupled security mechanisms
-        self.key_manager = DynamicKeyManager(master_shared_key)
-        self.nonce_tracker = NonceTracker()
+        self.master_shared_key = master_shared_key[:32]
+        self.replay_tracker = GooseReplayTracker()
+        self.boot_id = os.urandom(4)
 
     def get_algo_name(self) -> str:
-        return "AES-256-GCM (AEAD) + Dynamic Keys + Nonce Tracking (Byte Stream)"
+        return "AES-256-GCM (AEAD) + GOOSE Nonce [BootID|stNum|sqNum] (Byte Stream)"
 
     def protect(self, raw_message: bytes) -> tuple[bytes, dict]:
-        """Publisher side: Generates salt/nonce, derives key, encrypts, and measures time."""
+        """Publisher side: Builds GOOSE nonce and encrypts with AES-GCM."""
         t_start_total = time.perf_counter()
-        
-        # 1. Dynamic Key Derivation
-        t0 = time.perf_counter()
-        salt = os.urandom(32)
-        # Assuming your key_manager outputs 32 bytes (256 bits) for AES-256
-        dynamic_key = self.key_manager.derive_key(salt)[:32] 
-        t_key_gen = (time.perf_counter() - t0) * 1000
 
-        # 2. Nonce Generation
-        t1 = time.perf_counter()
-        # NIST recommends exactly 12 bytes (96 bits) for AES-GCM nonces
-        nonce = os.urandom(12) 
-        t_nonce = (time.perf_counter() - t1) * 1000
+        st_num, sq_num = extract_goose_state_numbers(raw_message)
+        nonce = self.boot_id + st_num.to_bytes(4, "big") + sq_num.to_bytes(4, "big")
 
-        # 3. AES-GCM Encryption & Authentication Tag Generation
+        # AES-GCM Encryption & Authentication Tag Generation
         t2 = time.perf_counter()
-        aesgcm = AESGCM(dynamic_key)
-        # Like ASCON and ChaCha, encrypt() appends the 16-byte MAC tag to the end
-        ciphertext = aesgcm.encrypt(nonce, raw_message, associated_data=None)
+        aesgcm = AESGCM(self.master_shared_key)
+        ciphertext = aesgcm.encrypt(nonce, raw_message, associated_data=nonce)
         t_encrypt = (time.perf_counter() - t2) * 1000
         
         t_total_crypto = (time.perf_counter() - t_start_total) * 1000
         
         # ---------------------------------------------------------
-        # THE CHANGE: Pure Byte Stream instead of a JSON dictionary
-        # Structure: [SALT (32 bytes)] + [NONCE (12 bytes)] + [CIPHERTEXT + TAG]
+        # Structure: [NONCE (12 bytes)] + [CIPHERTEXT + TAG]
         # ---------------------------------------------------------
-        secure_stream = salt + nonce + ciphertext
+        secure_stream = nonce + ciphertext
         
         # Local Metrics (Not sent over the network)
         metrics = {
-            "pub_key_deriv_ms": t_key_gen,
-            "pub_nonce_ms": t_nonce,
             "pub_encrypt_ms": t_encrypt,
             "pub_total_crypto_ms": t_total_crypto
         }
         return secure_stream, metrics
 
     def verify(self, secure_stream: bytes) -> tuple[bytes, dict]:
-        """Subscriber side: Verifies nonce, derives key, authenticates MAC, decrypts."""
+        """Subscriber side: Verifies replay from nonce and decrypts."""
         
         # ---------------------------------------------------------
-        # THE CHANGE: Byte slicing based on known fixed lengths
+        # Byte slicing based on known fixed lengths
         # ---------------------------------------------------------
-        salt = secure_stream[:32]
-        nonce = secure_stream[32:44]
-        ciphertext = secure_stream[44:]
+        nonce = secure_stream[:12]
+        ciphertext = secure_stream[12:]
+        boot_id = nonce[:4]
+        st_num = int.from_bytes(nonce[4:8], "big")
+        sq_num = int.from_bytes(nonce[8:12], "big")
         
         metrics = {}
         t_start_total = time.perf_counter()
 
-        # 1. Replay Attack Prevention (Nonce Tracking)
+        # 1. Replay Protection using Boot ID + stNum + sqNum
         t0 = time.perf_counter()
-        if not self.nonce_tracker.check_and_add(nonce):
-            raise ValueError("Replay Attack Detected! Nonce already used in a previous GOOSE message.")
-        metrics["sub_nonce_check_ms"] = (time.perf_counter() - t0) * 1000
+        if not self.replay_tracker.is_acceptable(boot_id, st_num, sq_num):
+            raise ValueError(
+                f"Replay Attack! boot_id={boot_id.hex()} stNum={st_num} sqNum={sq_num}"
+            )
+        metrics["sub_replay_check_ms"] = (time.perf_counter() - t0) * 1000
 
-        # 2. Dynamic Key Derivation
-        t1 = time.perf_counter()
-        dynamic_key = self.key_manager.derive_key(salt)[:32]
-        metrics["sub_key_deriv_ms"] = (time.perf_counter() - t1) * 1000
-
-        # 3. Decryption & AES-GCM Authenticity Check
+        # 2. Decryption & AES-GCM Authenticity Check
         t2 = time.perf_counter()
-        aesgcm = AESGCM(dynamic_key)
+        aesgcm = AESGCM(self.master_shared_key)
         try:
-            # Slices off the tag, verifies it, and unscrambles the data
-            raw_message = aesgcm.decrypt(nonce, ciphertext, associated_data=None)
+            raw_message = aesgcm.decrypt(nonce, ciphertext, associated_data=nonce)
         except Exception:
             raise ValueError("Data Tampering Detected! AES-GCM authentication tag failed.")
+
+        self.replay_tracker.commit(boot_id, st_num, sq_num)
             
         metrics["sub_decrypt_ms"] = (time.perf_counter() - t2) * 1000
 

@@ -1,36 +1,98 @@
 # File: crypto_algos/security_utils.py
 
-from cryptography.hazmat.primitives.kdf.hkdf import HKDF
-from cryptography.hazmat.primitives import hashes
+def _read_tlv_length(data: bytes, index: int) -> tuple[int, int]:
+    first = data[index]
+    index += 1
 
-class NonceTracker:
+    if first < 0x80:
+        return first, index
+    if first == 0x81:
+        return data[index], index + 1
+    if first == 0x82:
+        return int.from_bytes(data[index:index + 2], "big"), index + 2
+    if first == 0x83:
+        return int.from_bytes(data[index:index + 3], "big"), index + 3
+    raise ValueError("Unsupported TLV length encoding in GOOSE payload")
+
+
+def extract_goose_state_numbers(goose_payload: bytes) -> tuple[int, int]:
     """
-    Implements O(1) Replay Attack Prevention.
-    Maintains a set of used nonces to guarantee each message is unique.
+    Extracts (stNum, sqNum) from GOOSE payload bytes.
+    Expected payload starts at APPID and includes the GOOSE PDU.
+    """
+    if len(goose_payload) < 10:
+        raise ValueError("Invalid GOOSE payload: too short")
+
+    pdu_start = 8
+    if goose_payload[pdu_start] != 0x61:
+        raise ValueError("Invalid GOOSE payload: missing PDU tag 0x61")
+
+    pdu_length, value_index = _read_tlv_length(goose_payload, pdu_start + 1)
+    pdu_end = value_index + pdu_length
+
+    if pdu_end > len(goose_payload):
+        raise ValueError("Invalid GOOSE payload: truncated PDU")
+
+    st_num = None
+    sq_num = None
+    index = value_index
+
+    while index < pdu_end:
+        tag = goose_payload[index]
+        length, value_start = _read_tlv_length(goose_payload, index + 1)
+        value_end = value_start + length
+
+        if value_end > pdu_end:
+            raise ValueError("Invalid GOOSE payload: malformed TLV")
+
+        value = goose_payload[value_start:value_end]
+        if tag == 0x85:
+            st_num = int.from_bytes(value, "big")
+        elif tag == 0x86:
+            sq_num = int.from_bytes(value, "big")
+            if st_num is not None:
+                break
+
+        index = value_end
+
+    if st_num is None or sq_num is None:
+        raise ValueError("Invalid GOOSE payload: missing stNum or sqNum")
+
+    return st_num, sq_num
+
+
+class GooseReplayTracker:
+    """
+    Replay protection using Boot ID + stNum + sqNum semantics.
+    - boot_id change is treated as a new publisher session.
+    - stNum must not decrease.
+    - sqNum must strictly increase for the same stNum.
     """
     def __init__(self):
-        self.used_nonces = set()
+        self.last_boot_id: bytes | None = None
+        self.last_st_num = -1
+        self.last_sq_num = -1
 
-    def check_and_add(self, nonce: bytes) -> bool:
-        """Returns False if nonce is already used (Replay Attack), True otherwise."""
-        if nonce in self.used_nonces:
+    def is_acceptable(self, boot_id: bytes, st_num: int, sq_num: int) -> bool:
+        if len(boot_id) != 4:
             return False
-        self.used_nonces.add(nonce)
+
+        if self.last_boot_id is None or boot_id != self.last_boot_id:
+            return True
+
+        if st_num < self.last_st_num:
+            return False
+
+        if st_num > self.last_st_num:
+            return True
+
+        if sq_num <= self.last_sq_num:
+            return False
+
         return True
 
-class DynamicKeyManager:
-    """
-    Implements HKDF with SHA-256 to derive a unique 256-bit key per message 
-    using a static master key and a dynamic random salt.
-    """
-    def __init__(self, master_key: bytes):
-        self.master_key = master_key
+    def commit(self, boot_id: bytes, st_num: int, sq_num: int) -> None:
+        self.last_boot_id = boot_id
+        self.last_st_num = st_num
+        self.last_sq_num = sq_num
 
-    def derive_key(self, salt: bytes) -> bytes:
-        hkdf = HKDF(
-            algorithm=hashes.SHA256(),
-            length=32, # 256 bits required for ChaCha20
-            salt=salt,
-            info=b"GOOSE_message_key_derivation",
-        )
-        return hkdf.derive(self.master_key)

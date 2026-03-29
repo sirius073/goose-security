@@ -1,0 +1,11 @@
+# Python cache
+__pycache__/
+*.py[cod]
+
+# Local virtual envs
+.venv/
+pygoose/.venv/
+
+# Ascon local build outputs
+ascon-c/build/
+ascon-c/build-dll/

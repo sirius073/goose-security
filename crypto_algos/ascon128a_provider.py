@@ -2,7 +2,6 @@ import os
 import time
 import ctypes
 import importlib
-from pathlib import Path
 from ctypes import POINTER, byref, c_int, c_ubyte, c_ulonglong
 from .base_provider import CryptoProvider
 from .security_utils import NonceTracker, DynamicKeyManager
@@ -12,7 +11,6 @@ try:
 except Exception:
     _ascon_py = None
 
-
 class _AsconCLib:
     KEY_LEN = 16
     NONCE_LEN = 16
@@ -20,45 +18,18 @@ class _AsconCLib:
 
     def __init__(self) -> None:
         self._lib = self._load_library()
-        self._encrypt = self._resolve_symbol([
-            "crypto_aead_encrypt",
-            "_crypto_aead_encrypt",
-            "crypto_aead_encrypt@36",
-        ])
-        self._decrypt = self._resolve_symbol([
-            "crypto_aead_decrypt",
-            "_crypto_aead_decrypt",
-            "crypto_aead_decrypt@36",
-        ])
+        self._encrypt = self._resolve_symbol(["crypto_aead_encrypt"])
+        self._decrypt = self._resolve_symbol(["crypto_aead_decrypt"])
         self._configure_signatures()
 
     def _load_library(self):
         explicit_path = os.getenv("ASCON_C_LIB")
         candidate_paths = []
-        repo_root = Path(__file__).resolve().parents[1]
-
-        if os.name == "nt":
-            candidate_paths.extend([
-                repo_root / "ascon-c" / "build-dll" / "Release" / "crypto_aead_asconaead128_ref.dll",
-                repo_root / "ascon-c" / "build-dll" / "Debug" / "crypto_aead_asconaead128_ref.dll",
-                repo_root / "ascon-c" / "build" / "Release" / "crypto_aead_asconaead128_ref.dll",
-                repo_root / "ascon-c" / "build" / "Debug" / "crypto_aead_asconaead128_ref.dll",
-            ])
-        else:
-            candidate_paths.extend([
-                repo_root / "ascon-c" / "build-dll" / "libcrypto_aead_asconaead128_ref.so",
-                repo_root / "ascon-c" / "build" / "libcrypto_aead_asconaead128_ref.so",
-                repo_root / "ascon-c" / "build-dll" / "libcrypto_aead_asconaead128_ref.dylib",
-                repo_root / "ascon-c" / "build" / "libcrypto_aead_asconaead128_ref.dylib",
-            ])
 
         if explicit_path:
             candidate_paths.append(explicit_path)
 
         candidate_paths.extend([
-            "crypto_aead_asconaead128_ref.dll",
-            "libcrypto_aead_asconaead128_ref.so",
-            "libcrypto_aead_asconaead128_ref.dylib",
             "ascon.dll",
             "libascon.dll",
             "ascon-c.dll",
@@ -68,15 +39,6 @@ class _AsconCLib:
         errors = []
         for path in candidate_paths:
             try:
-                if isinstance(path, Path):
-                    if not path.exists():
-                        raise OSError(f"file not found: {path}")
-
-                    if os.name == "nt":
-                        os.add_dll_directory(str(path.parent))
-
-                    return ctypes.CDLL(str(path))
-
                 return ctypes.CDLL(path)
             except OSError as exc:
                 errors.append(f"{path}: {exc}")
@@ -84,7 +46,7 @@ class _AsconCLib:
         detail = " | ".join(errors) if errors else "No candidates tried"
         raise RuntimeError(
             "Unable to load ascon-c shared library. "
-            "Set ASCON_C_LIB to your compiled library path. "
+            "Set ASCON_C_LIB to your compiled DLL path (e.g., C:\\path\\to\\libascon.dll). "
             f"Load attempts: {detail}"
         )
 
@@ -223,7 +185,7 @@ class Ascon128aProvider(CryptoProvider):
     def __init__(self, master_shared_key: bytes, backend: str | None = None):
         self.key_manager = DynamicKeyManager(master_shared_key)
         self.nonce_tracker = NonceTracker()
-        selected_backend = (backend or os.getenv("ASCON_BACKEND", "c")).strip().lower()
+        selected_backend = (backend or os.getenv("ASCON_BACKEND", "python")).strip().lower()
 
         if selected_backend in {"python", "py", "legacy"}:
             self._backend_name = "python"

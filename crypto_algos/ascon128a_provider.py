@@ -59,7 +59,7 @@ class _AsconCLib:
 
     def _configure_signatures(self) -> None:
         self._encrypt.argtypes = [
-            POINTER(c_ubyte), POINTER(c_ulonglong), 
+            c_char_p, POINTER(c_ulonglong), 
             c_char_p, c_ulonglong,  # Plaintext
             c_char_p, c_ulonglong,  # Associated Data
             c_char_p,               # Secret (None for ASCON AEAD)
@@ -69,7 +69,7 @@ class _AsconCLib:
         self._encrypt.restype = c_int
 
         self._decrypt.argtypes = [
-            POINTER(c_ubyte), POINTER(c_ulonglong), 
+            c_char_p, POINTER(c_ulonglong), 
             c_char_p,               # Secret (None)
             c_char_p, c_ulonglong,  # Ciphertext
             c_char_p, c_ulonglong,  # Associated Data
@@ -85,7 +85,7 @@ class _AsconCLib:
             raise ValueError(f"Invalid ASCON-128a nonce length: expected {self.NONCE_LEN}, got {len(nonce)}")
 
         max_ciphertext_len = len(plaintext) + self.TAG_LEN
-        ciphertext_buffer = (c_ubyte * max_ciphertext_len)()
+        ciphertext_buffer = ctypes.create_string_buffer(max_ciphertext_len)
         ciphertext_len = c_ulonglong(0)
 
         rc = self._encrypt(
@@ -102,7 +102,7 @@ class _AsconCLib:
         if rc != 0:
             raise ValueError(f"ascon-c encryption failed with code {rc}")
 
-        return bytes(ciphertext_buffer[:ciphertext_len.value])
+        return ciphertext_buffer.raw[:ciphertext_len.value]
 
     def decrypt(self, key: bytes, nonce: bytes, associated_data: bytes, ciphertext: bytes) -> bytes:
         if len(key) != self.KEY_LEN:
@@ -112,7 +112,7 @@ class _AsconCLib:
         if len(ciphertext) < self.TAG_LEN:
             raise ValueError("Invalid ciphertext length for ASCON-128a")
 
-        plaintext_buffer = (c_ubyte * len(ciphertext))()
+        plaintext_buffer = ctypes.create_string_buffer(len(ciphertext))
         plaintext_len = c_ulonglong(0)
 
         rc = self._decrypt(
@@ -129,7 +129,7 @@ class _AsconCLib:
         if rc != 0:
             raise ValueError("Data Tampering Detected! ASCON authentication failed.")
 
-        return bytes(plaintext_buffer[:plaintext_len.value])
+        return plaintext_buffer.raw[:plaintext_len.value]
 
 
 class _AsconPyLib:
@@ -164,7 +164,7 @@ class Ascon128aProvider(CryptoProvider):
         self.master_shared_key = master_shared_key[:16]
         self.replay_tracker = GooseReplayTracker()
         self.boot_id = os.urandom(4)
-        selected_backend = (backend or os.getenv("ASCON_BACKEND", "python")).strip().lower()
+        selected_backend = (backend or os.getenv("ASCON_BACKEND", "c")).strip().lower()
 
         if selected_backend in {"python", "py", "legacy"}:
             self._backend_name = "python"

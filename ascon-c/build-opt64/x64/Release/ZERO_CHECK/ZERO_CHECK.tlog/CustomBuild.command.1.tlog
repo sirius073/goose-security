@@ -1,0 +1,10 @@
+^D:\IOP\GOOSE-SECURITY\ASCON-C\BUILD-OPT64\CMAKEFILES\5FCF23AB5FFB7FEB19C5CADDFFD0B871\GENERATE.STAMP.RULE
+setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -SD:/IOP/goose-security/ascon-c -BD:/IOP/goose-security/ascon-c/build-opt64 --check-stamp-list CMakeFiles/generate.stamp.list --vs-solution-file D:/IOP/goose-security/ascon-c/build-opt64/ascon.sln
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal & call :cmErrorLevel %errorlevel% & goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd

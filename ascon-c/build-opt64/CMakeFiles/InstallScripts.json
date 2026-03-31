@@ -1,0 +1,7 @@
+{
+	"InstallScripts" : 
+	[
+		"D:/IOP/goose-security/ascon-c/build-opt64/cmake_install.cmake"
+	],
+	"Parallel" : false
+}

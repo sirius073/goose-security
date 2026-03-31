@@ -1,0 +1,3 @@
+D:/IOP/goose-security/ascon-c/build-opt64/crypto_aead_asconaead128_opt64.dir/RelWithDebInfo/aead.obj
+D:/IOP/goose-security/ascon-c/build-opt64/crypto_aead_asconaead128_opt64.dir/RelWithDebInfo/permutations.obj
+D:/IOP/goose-security/ascon-c/build-opt64/crypto_aead_asconaead128_opt64.dir/RelWithDebInfo/printstate.obj

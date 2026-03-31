@@ -1,0 +1,4 @@
+D:/IOP/goose-security/ascon-c/build-opt64/CMakeFiles/crypto_aead_asconaead128_opt64.dir
+D:/IOP/goose-security/ascon-c/build-opt64/CMakeFiles/RUN_TESTS.dir
+D:/IOP/goose-security/ascon-c/build-opt64/CMakeFiles/ALL_BUILD.dir
+D:/IOP/goose-security/ascon-c/build-opt64/CMakeFiles/ZERO_CHECK.dir

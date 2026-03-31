@@ -1,0 +1,25 @@
+EXPORTS 
+	CLEAR
+	DSEP
+	LOADBYTES
+	NOTZERO
+	P
+	P12ROUNDS
+	P6ROUNDS
+	P8ROUNDS
+	PAD
+	ROR
+	ROUND
+	STOREBYTES
+	ascon_adata
+	ascon_aead_decrypt
+	ascon_aead_encrypt
+	ascon_decrypt
+	ascon_encrypt
+	ascon_final
+	ascon_gettag
+	ascon_initaead
+	ascon_loadkey
+	ascon_verify
+	crypto_aead_decrypt
+	crypto_aead_encrypt

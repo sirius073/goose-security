@@ -1,0 +1,62 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "ALL_BUILD", "ALL_BUILD.vcxproj", "{C68264E0-0BD0-34A7-BA3B-0AAB1F2A2241}"
+	ProjectSection(ProjectDependencies) = postProject
+		{6D4F4C50-D455-3EA4-896E-92924977BF35} = {6D4F4C50-D455-3EA4-896E-92924977BF35}
+		{117F4E02-D454-354D-8DC1-BDB14AF8B010} = {117F4E02-D454-354D-8DC1-BDB14AF8B010}
+	EndProjectSection
+EndProject
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "RUN_TESTS", "RUN_TESTS.vcxproj", "{15C222F3-56A3-3A98-93E5-65913E831A6F}"
+	ProjectSection(ProjectDependencies) = postProject
+		{6D4F4C50-D455-3EA4-896E-92924977BF35} = {6D4F4C50-D455-3EA4-896E-92924977BF35}
+	EndProjectSection
+EndProject
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "ZERO_CHECK", "ZERO_CHECK.vcxproj", "{6D4F4C50-D455-3EA4-896E-92924977BF35}"
+	ProjectSection(ProjectDependencies) = postProject
+	EndProjectSection
+EndProject
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "crypto_aead_asconaead128_opt64", "crypto_aead_asconaead128_opt64.vcxproj", "{117F4E02-D454-354D-8DC1-BDB14AF8B010}"
+	ProjectSection(ProjectDependencies) = postProject
+		{6D4F4C50-D455-3EA4-896E-92924977BF35} = {6D4F4C50-D455-3EA4-896E-92924977BF35}
+	EndProjectSection
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|x64 = Debug|x64
+		Release|x64 = Release|x64
+		MinSizeRel|x64 = MinSizeRel|x64
+		RelWithDebInfo|x64 = RelWithDebInfo|x64
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{C68264E0-0BD0-34A7-BA3B-0AAB1F2A2241}.Debug|x64.ActiveCfg = Debug|x64
+		{C68264E0-0BD0-34A7-BA3B-0AAB1F2A2241}.Release|x64.ActiveCfg = Release|x64
+		{C68264E0-0BD0-34A7-BA3B-0AAB1F2A2241}.MinSizeRel|x64.ActiveCfg = MinSizeRel|x64
+		{C68264E0-0BD0-34A7-BA3B-0AAB1F2A2241}.RelWithDebInfo|x64.ActiveCfg = RelWithDebInfo|x64
+		{15C222F3-56A3-3A98-93E5-65913E831A6F}.Debug|x64.ActiveCfg = Debug|x64
+		{15C222F3-56A3-3A98-93E5-65913E831A6F}.Release|x64.ActiveCfg = Release|x64
+		{15C222F3-56A3-3A98-93E5-65913E831A6F}.MinSizeRel|x64.ActiveCfg = MinSizeRel|x64
+		{15C222F3-56A3-3A98-93E5-65913E831A6F}.RelWithDebInfo|x64.ActiveCfg = RelWithDebInfo|x64
+		{6D4F4C50-D455-3EA4-896E-92924977BF35}.Debug|x64.ActiveCfg = Debug|x64
+		{6D4F4C50-D455-3EA4-896E-92924977BF35}.Debug|x64.Build.0 = Debug|x64
+		{6D4F4C50-D455-3EA4-896E-92924977BF35}.Release|x64.ActiveCfg = Release|x64
+		{6D4F4C50-D455-3EA4-896E-92924977BF35}.Release|x64.Build.0 = Release|x64
+		{6D4F4C50-D455-3EA4-896E-92924977BF35}.MinSizeRel|x64.ActiveCfg = MinSizeRel|x64
+		{6D4F4C50-D455-3EA4-896E-92924977BF35}.MinSizeRel|x64.Build.0 = MinSizeRel|x64
+		{6D4F4C50-D455-3EA4-896E-92924977BF35}.RelWithDebInfo|x64.ActiveCfg = RelWithDebInfo|x64
+		{6D4F4C50-D455-3EA4-896E-92924977BF35}.RelWithDebInfo|x64.Build.0 = RelWithDebInfo|x64
+		{117F4E02-D454-354D-8DC1-BDB14AF8B010}.Debug|x64.ActiveCfg = Debug|x64
+		{117F4E02-D454-354D-8DC1-BDB14AF8B010}.Debug|x64.Build.0 = Debug|x64
+		{117F4E02-D454-354D-8DC1-BDB14AF8B010}.Release|x64.ActiveCfg = Release|x64
+		{117F4E02-D454-354D-8DC1-BDB14AF8B010}.Release|x64.Build.0 = Release|x64
+		{117F4E02-D454-354D-8DC1-BDB14AF8B010}.MinSizeRel|x64.ActiveCfg = MinSizeRel|x64
+		{117F4E02-D454-354D-8DC1-BDB14AF8B010}.MinSizeRel|x64.Build.0 = MinSizeRel|x64
+		{117F4E02-D454-354D-8DC1-BDB14AF8B010}.RelWithDebInfo|x64.ActiveCfg = RelWithDebInfo|x64
+		{117F4E02-D454-354D-8DC1-BDB14AF8B010}.RelWithDebInfo|x64.Build.0 = RelWithDebInfo|x64
+	EndGlobalSection
+	GlobalSection(ExtensibilityGlobals) = postSolution
+		SolutionGuid = {CC57F92A-3732-3958-B1B8-18CDB2CE69E9}
+	EndGlobalSection
+	GlobalSection(ExtensibilityAddIns) = postSolution
+	EndGlobalSection
+EndGlobal

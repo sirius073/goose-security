@@ -1,0 +1,13 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="17.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <CustomBuild Include="D:\IOP\goose-security\ascon-c\build-opt64\CMakeFiles\5fcf23ab5ffb7feb19c5caddffd0b871\generate.stamp.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
+  </ItemGroup>
+  <ItemGroup>
+    <Filter Include="CMake Rules">
+      <UniqueIdentifier>{9EDFB823-A1BA-39FC-A167-C6EDCB5759B4}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+</Project>

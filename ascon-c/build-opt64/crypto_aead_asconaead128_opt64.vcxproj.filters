@@ -1,0 +1,57 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="17.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <ClCompile Include="D:\IOP\goose-security\ascon-c\crypto_aead\asconaead128\opt64\aead.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="D:\IOP\goose-security\ascon-c\crypto_aead\asconaead128\opt64\permutations.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="D:\IOP\goose-security\ascon-c\crypto_aead\asconaead128\opt64\printstate.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="D:\IOP\goose-security\ascon-c\crypto_aead\asconaead128\opt64\api.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="D:\IOP\goose-security\ascon-c\crypto_aead\asconaead128\opt64\ascon.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="D:\IOP\goose-security\ascon-c\crypto_aead\asconaead128\opt64\config.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="D:\IOP\goose-security\ascon-c\crypto_aead\asconaead128\opt64\constants.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="D:\IOP\goose-security\ascon-c\crypto_aead\asconaead128\opt64\forceinline.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="D:\IOP\goose-security\ascon-c\crypto_aead\asconaead128\opt64\lendian.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="D:\IOP\goose-security\ascon-c\crypto_aead\asconaead128\opt64\permutations.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="D:\IOP\goose-security\ascon-c\crypto_aead\asconaead128\opt64\printstate.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="D:\IOP\goose-security\ascon-c\crypto_aead\asconaead128\opt64\round.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="D:\IOP\goose-security\ascon-c\crypto_aead\asconaead128\opt64\word.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+  </ItemGroup>
+  <ItemGroup>
+    <CustomBuild Include="D:\IOP\goose-security\ascon-c\CMakeLists.txt" />
+  </ItemGroup>
+  <ItemGroup>
+    <Filter Include="Header Files">
+      <UniqueIdentifier>{D37ADEFA-45EA-3BF3-B2BD-02B2D7122C6D}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Source Files">
+      <UniqueIdentifier>{C876657D-B6FC-3F05-8249-2466ECD6F4A0}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+</Project>

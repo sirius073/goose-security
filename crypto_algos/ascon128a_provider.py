@@ -2,7 +2,7 @@ import os
 import time
 import ctypes
 import importlib
-from ctypes import POINTER, byref, c_int, c_ubyte, c_ulonglong
+from ctypes import POINTER, byref, c_int, c_ubyte, c_ulonglong, c_char_p
 from .base_provider import CryptoProvider
 from .security_utils import GooseReplayTracker, extract_goose_state_numbers
 
@@ -59,36 +59,24 @@ class _AsconCLib:
 
     def _configure_signatures(self) -> None:
         self._encrypt.argtypes = [
-            POINTER(c_ubyte),
-            POINTER(c_ulonglong),
-            POINTER(c_ubyte),
-            c_ulonglong,
-            POINTER(c_ubyte),
-            c_ulonglong,
-            POINTER(c_ubyte),
-            POINTER(c_ubyte),
-            POINTER(c_ubyte),
+            POINTER(c_ubyte), POINTER(c_ulonglong), 
+            c_char_p, c_ulonglong,  # Plaintext
+            c_char_p, c_ulonglong,  # Associated Data
+            c_char_p,               # Secret (None for ASCON AEAD)
+            c_char_p,               # Nonce
+            c_char_p,               # Key
         ]
         self._encrypt.restype = c_int
 
         self._decrypt.argtypes = [
-            POINTER(c_ubyte),
-            POINTER(c_ulonglong),
-            POINTER(c_ubyte),
-            POINTER(c_ubyte),
-            c_ulonglong,
-            POINTER(c_ubyte),
-            c_ulonglong,
-            POINTER(c_ubyte),
-            POINTER(c_ubyte),
+            POINTER(c_ubyte), POINTER(c_ulonglong), 
+            c_char_p,               # Secret (None)
+            c_char_p, c_ulonglong,  # Ciphertext
+            c_char_p, c_ulonglong,  # Associated Data
+            c_char_p,               # Nonce
+            c_char_p,               # Key
         ]
         self._decrypt.restype = c_int
-
-    @staticmethod
-    def _to_u8_ptr(data: bytes):
-        if not data:
-            return None
-        return (c_ubyte * len(data)).from_buffer_copy(data)
 
     def encrypt(self, key: bytes, nonce: bytes, associated_data: bytes, plaintext: bytes) -> bytes:
         if len(key) != self.KEY_LEN:
@@ -100,21 +88,16 @@ class _AsconCLib:
         ciphertext_buffer = (c_ubyte * max_ciphertext_len)()
         ciphertext_len = c_ulonglong(0)
 
-        key_ptr = self._to_u8_ptr(key)
-        nonce_ptr = self._to_u8_ptr(nonce)
-        ad_ptr = self._to_u8_ptr(associated_data)
-        plaintext_ptr = self._to_u8_ptr(plaintext)
-
         rc = self._encrypt(
             ciphertext_buffer,
             byref(ciphertext_len),
-            plaintext_ptr,
+            plaintext,
             c_ulonglong(len(plaintext)),
-            ad_ptr,
+            associated_data,
             c_ulonglong(len(associated_data)),
             None,
-            nonce_ptr,
-            key_ptr,
+            nonce,
+            key,
         )
         if rc != 0:
             raise ValueError(f"ascon-c encryption failed with code {rc}")
@@ -132,21 +115,16 @@ class _AsconCLib:
         plaintext_buffer = (c_ubyte * len(ciphertext))()
         plaintext_len = c_ulonglong(0)
 
-        key_ptr = self._to_u8_ptr(key)
-        nonce_ptr = self._to_u8_ptr(nonce)
-        ad_ptr = self._to_u8_ptr(associated_data)
-        ciphertext_ptr = self._to_u8_ptr(ciphertext)
-
         rc = self._decrypt(
             plaintext_buffer,
             byref(plaintext_len),
             None,
-            ciphertext_ptr,
+            ciphertext,
             c_ulonglong(len(ciphertext)),
-            ad_ptr,
+            associated_data,
             c_ulonglong(len(associated_data)),
-            nonce_ptr,
-            key_ptr,
+            nonce,
+            key,
         )
         if rc != 0:
             raise ValueError("Data Tampering Detected! ASCON authentication failed.")

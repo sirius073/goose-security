@@ -9,6 +9,7 @@ class ChaCha20Provider(CryptoProvider):
         self.master_shared_key = master_shared_key[:32]
         self.replay_tracker = GooseReplayTracker()
         self.boot_id = os.urandom(4)
+        self.chacha = ChaCha20Poly1305(self.master_shared_key)
 
     def get_algo_name(self) -> str:
         return "ChaCha20-Poly1305 (AEAD) + GOOSE Nonce [BootID|stNum|sqNum] (Byte Stream)"
@@ -22,8 +23,7 @@ class ChaCha20Provider(CryptoProvider):
 
         # 3. ChaCha20 Encryption & Poly1305 MAC Generation
         t2 = time.perf_counter()
-        chacha = ChaCha20Poly1305(self.master_shared_key)
-        ciphertext = chacha.encrypt(nonce, raw_message, associated_data=nonce)
+        ciphertext = self.chacha.encrypt(nonce, raw_message, associated_data=nonce)
         t_encrypt = (time.perf_counter() - t2) * 1000
         
         t_total_crypto = (time.perf_counter() - t_start_total) * 1000
@@ -64,9 +64,8 @@ class ChaCha20Provider(CryptoProvider):
 
         # 2. Decryption & Poly1305 Authenticity Check
         t2 = time.perf_counter()
-        chacha = ChaCha20Poly1305(self.master_shared_key)
         try:
-            raw_message = chacha.decrypt(nonce, ciphertext, associated_data=nonce)
+            raw_message = self.chacha.decrypt(nonce, ciphertext, associated_data=nonce)
         except Exception:
             raise ValueError("Data Tampering Detected! Poly1305 MAC verification failed.")
 

@@ -9,6 +9,7 @@ class AESGCMProvider(CryptoProvider):
         self.master_shared_key = master_shared_key[:32]
         self.replay_tracker = GooseReplayTracker()
         self.boot_id = os.urandom(4)
+        self.aesgcm = AESGCM(self.master_shared_key)
 
     def get_algo_name(self) -> str:
         return "AES-256-GCM (AEAD) + GOOSE Nonce [BootID|stNum|sqNum] (Byte Stream)"
@@ -22,8 +23,7 @@ class AESGCMProvider(CryptoProvider):
 
         # AES-GCM Encryption & Authentication Tag Generation
         t2 = time.perf_counter()
-        aesgcm = AESGCM(self.master_shared_key)
-        ciphertext = aesgcm.encrypt(nonce, raw_message, associated_data=nonce)
+        ciphertext = self.aesgcm.encrypt(nonce, raw_message, associated_data=nonce)
         t_encrypt = (time.perf_counter() - t2) * 1000
         
         t_total_crypto = (time.perf_counter() - t_start_total) * 1000
@@ -65,9 +65,8 @@ class AESGCMProvider(CryptoProvider):
 
         # 2. Decryption & AES-GCM Authenticity Check
         t2 = time.perf_counter()
-        aesgcm = AESGCM(self.master_shared_key)
         try:
-            raw_message = aesgcm.decrypt(nonce, ciphertext, associated_data=nonce)
+            raw_message = self.aesgcm.decrypt(nonce, ciphertext, associated_data=nonce)
         except Exception:
             raise ValueError("Data Tampering Detected! AES-GCM authentication tag failed.")
 

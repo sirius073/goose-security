@@ -29,11 +29,19 @@ class _AsconCLib:
         if explicit_path:
             candidate_paths.append(explicit_path)
 
+        # Automatically look for the built opt64 or neon shared objects 
+        # inside the ascon-c tree (on Linux & Windows) without needing ENV variables.
+        base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        
         candidate_paths.extend([
+            os.path.join(base_dir, "ascon-c", "build-opt64", "libcrypto_aead_asconaead128_opt64.so"),
+            os.path.join(base_dir, "ascon-c", "build-neon", "libcrypto_aead_asconaead128_neon.so"),
+            os.path.join(base_dir, "ascon-c", "build-opt64", "Release", "crypto_aead_asconaead128_opt64.dll"),
+            os.path.join(base_dir, "ascon.dll"),
+            os.path.join(base_dir, "libascon.so"),
             "ascon.dll",
             "libascon.dll",
-            "ascon-c.dll",
-            "libascon-c.dll",
+            "libascon.so",
         ])
 
         errors = []

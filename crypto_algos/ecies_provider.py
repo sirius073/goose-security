@@ -21,6 +21,9 @@ class ECIESProvider(CryptoProvider):
             # Subscriber loads the private key to DECRYPT the data
             with open("keys/sub_decrypt_private.bin", "rb") as f:
                 self.private_key = x25519.X25519PrivateKey.from_private_bytes(f.read())
+        
+        # Cache standard hash instance
+        self.hash_algo = hashes.SHA256()
 
     def get_algo_name(self) -> str:
         return "ECIES (X25519 Asymmetric Encryption) (Byte Stream)"
@@ -34,7 +37,7 @@ class ECIESProvider(CryptoProvider):
         ephemeral_public_key = ephemeral_private_key.public_key()
         shared_secret = ephemeral_private_key.exchange(self.peer_public_key)
         derived_key = HKDF(
-            algorithm=hashes.SHA256(), length=32, salt=None, info=b"ecies-goose"
+            algorithm=self.hash_algo, length=32, salt=None, info=b"ecies-goose"
         ).derive(shared_secret)
         t_key_math = (time.perf_counter() - t0) * 1000
         
@@ -98,7 +101,7 @@ class ECIESProvider(CryptoProvider):
         ephemeral_public_key = x25519.X25519PublicKey.from_public_bytes(ephemeral_pub_bytes)
         shared_secret = self.private_key.exchange(ephemeral_public_key)
         derived_key = HKDF(
-            algorithm=hashes.SHA256(), length=32, salt=None, info=b"ecies-goose"
+            algorithm=self.hash_algo, length=32, salt=None, info=b"ecies-goose"
         ).derive(shared_secret)
         metrics["sub_key_deriv_ms"] = (time.perf_counter() - t1) * 1000
         

@@ -1,0 +1,218 @@
+#!/usr/bin/env python3
+# subscriber_metrics.py
+import time
+import os
+import argparse
+import socket
+import struct
+import csv
+import resource
+import json      
+import tracemalloc  # <--- ADDED FOR MEMORY METRICS
+
+# ---------------------------------------------------------------------------
+from crypto_algos.chacha20_provider import ChaCha20Provider
+from crypto_algos.ascon128a_provider import Ascon128aProvider
+from crypto_algos.ed25519_provider import Ed25519Provider
+from crypto_algos.ecies_provider import ECIESProvider
+from crypto_algos.aes_gcm_provider import AESGCMProvider
+# ---------------------------------------------------------------------------
+
+parser = argparse.ArgumentParser(description="Layer 2 GOOSE Subscriber (with metrics)")
+parser.add_argument("--algo", type=str, default="none", help="Choices: none, ecies, ascon, ed25519, chacha, aesgcm")
+parser.add_argument("--csv", type=str, default="./metrics/goose_metrics.csv", help="CSV file to append metrics")
+args = parser.parse_args()
+
+GOOSE_TYPE = 0x88B8
+IFACE = "h2-eth0"
+
+os.makedirs(os.path.dirname(args.csv), exist_ok=True)
+
+# GLOBAL METRICS
+total_attempts = 0
+valid_packet_count = 0
+sum_net_transit = 0.0
+total_payload_bits = 0
+metric_sums = {}
+
+def cur_mem_kb():
+    try:
+        usage = resource.getrusage(resource.RUSAGE_SELF)
+        return float(getattr(usage, "ru_maxrss", 0.0))
+    except Exception:
+        return 0.0
+
+def write_csv_header_if_needed(csv_path):
+    if not os.path.exists(csv_path):
+        with open(csv_path, "w", newline="") as cf:
+            writer = csv.writer(cf)
+            writer.writerow(["ts","direction","algo","msg_index","net_transit_ms","crypto_ms",
+                             "payload_bytes","overhead_bytes","throughput_mbps","mem_kb","message_text", "detailed_metrics"])
+
+def process_goose_frame(raw_packet, crypto_provider, csv_path):
+    global total_attempts, valid_packet_count, sum_net_transit, total_payload_bits, metric_sums
+
+    wire_recv_timestamp = time.time()
+
+    if len(raw_packet) < 22:
+        return
+
+    total_attempts += 1
+
+    eth_header = raw_packet[:14]
+    timestamp_bytes = raw_packet[14:22]
+    secure_stream = raw_packet[22:]
+
+    try:
+        # 1. Unpack the 8-byte network timestamp
+        send_timestamp = struct.unpack("!d", timestamp_bytes)[0]
+
+        # 2. Cryptographic Verification & Authentication
+        if crypto_provider is None:
+            raw_goose_payload = secure_stream
+            sub_metrics = {"sub_total_crypto_ms": 0.0, "sub_cpu_process_ms": 0.0, "sub_peak_memory_bytes": 0}
+        else:
+            # --- START MEASUREMENT ---
+            tracemalloc.start()
+            cpu_start = time.process_time_ns()
+
+            raw_goose_payload, sub_metrics = crypto_provider.verify(secure_stream)
+
+            # --- STOP MEASUREMENT ---
+            cpu_end = time.process_time_ns()
+            current_mem, peak_mem = tracemalloc.get_traced_memory()
+            tracemalloc.stop()
+
+            # Convert nanoseconds to milliseconds
+            cpu_process_ms = (cpu_end - cpu_start) / 1_000_000.0
+            
+            # Add to metrics dictionary
+            sub_metrics["sub_cpu_process_ms"] = cpu_process_ms
+            sub_metrics["sub_peak_memory_bytes"] = peak_mem
+
+        # 3. Reconstruct the full Layer 2 frame (Ready for PyGoose later)
+        full_frame = eth_header + raw_goose_payload
+
+        # 4. If we reach here, the packet is AUTHENTIC and FRESH
+        t_net = max(0.0001, (wire_recv_timestamp - send_timestamp) * 1000)
+
+        # Skip the 1st packet for metric accumulation (warmup)
+        if total_attempts > 1:
+            valid_packet_count += 1
+            sum_net_transit += t_net
+            total_payload_bits += (len(raw_packet) * 8)
+
+            for key, val in sub_metrics.items():
+                metric_sums[key] = metric_sums.get(key, 0.0) + val
+
+            try:
+                printable = ''.join([c if c.isprintable() else '.' for c in raw_goose_payload.decode('ascii', errors='ignore')])
+                printable = printable[:200]
+            except Exception:
+                printable = ""
+
+            crypto_ms = sub_metrics.get("sub_total_crypto_ms", 0.0)
+            crypto_time_sec = max(0.0001, crypto_ms / 1000.0)
+            throughput_mbps = ((len(raw_packet) * 8) / crypto_time_sec) / 1_000_000 if crypto_ms > 0 else 0.0
+
+            mem_kb = cur_mem_kb()
+            overhead_bytes = ""
+
+            with open(csv_path, "a", newline="") as cf:
+                csvw = csv.writer(cf)
+                csvw.writerow([time.time(), "subscriber", crypto_provider.get_algo_name() if crypto_provider else "NONE (Plaintext)",
+                               valid_packet_count, f"{t_net:.4f}", f"{crypto_ms:.4f}", len(raw_goose_payload),
+                               overhead_bytes, f"{throughput_mbps:.4f}", f"{mem_kb:.1f}", printable, json.dumps(sub_metrics)])
+                cf.flush()
+
+            if valid_packet_count % 20 == 0:
+                tot_ms = sub_metrics.get("sub_total_crypto_ms", 0.0)
+                print(f"[*] Success {valid_packet_count} | Transit: {t_net:.4f}ms | Sub Crypto: {tot_ms:.4f}ms | Attempt #{total_attempts}")
+
+            # Continuously print Averages every 100 packets without exiting
+            if valid_packet_count % 100 == 0:
+                avg_net = sum_net_transit / valid_packet_count
+                total_crypto_sum = metric_sums.get("sub_total_crypto_ms", 0.0)
+                crypto_time_sec = max(0.0001, total_crypto_sum / 1000.0)
+                throughput_mbps = (total_payload_bits / crypto_time_sec) / 1_000_000
+                algo_name = crypto_provider.get_algo_name() if crypto_provider else "NONE (Plaintext)"
+
+                print(f"\n[*] =========================================")
+                print(f"[*] SUBSCRIBER METRICS ({valid_packet_count} Message Running Average)")
+                print(f"[*] Algorithm: {algo_name}")
+                print(f"[*] =========================================")
+                print(f"  Avg Network Transit      : {avg_net:.5f} ms")
+                print(f"  -----------------------------------------")
+
+                for key, total_val in metric_sums.items():
+                    if key != "sub_total_crypto_ms":
+                        formatted_name = key.replace('_', ' ').title()
+                        print(f"  Avg {formatted_name.ljust(22)}: {(total_val / valid_packet_count):.5f} ms/bytes")
+
+                print(f"  -----------------------------------------")
+                print(f"  Total Avg Sub Crypto    : {(total_crypto_sum / valid_packet_count):.5f} ms")
+                print(f"  Processing Throughput   : {throughput_mbps:.2f} Mbps")
+                print(f"[*] =========================================")
+                # os._exit(0) <-- Removed to keep the subscriber alive continuously
+
+    except ValueError as ve:
+        error_msg = str(ve)
+        print(f"\n[!!!] CRITICAL SECURITY ALERT | Packet Attempt #{total_attempts} [!!!]")
+
+        if "Replay" in error_msg:
+            print(f"    [TYPE] Anti-Replay Violation")
+            print(f"    [INFO] Nonce fields (Boot ID, stNum, sqNum) indicate replay/out-of-order packet.")
+        elif "Tampering" in error_msg or "Signature" in error_msg or "authentication failed" in error_msg:
+            print(f"    [TYPE] Integrity/Authentication Violation")
+            print(f"    [INFO] Cryptographic Tag/Signature mismatch. Payload has been modified!")
+        else:
+            print(f"    [TYPE] Unknown Security Error")
+            print(f"    [INFO] {error_msg}")
+
+        print(f"    [STAT] Packets Validated Before Attack: {valid_packet_count}")
+        print(f"\n[!] DROPPING MALICIOUS PACKET. CONTINUING RECEPTION.\n")
+
+    except Exception as e:
+        pass
+
+def start_subscriber(crypto_provider, csv_path):
+    algo_name = crypto_provider.get_algo_name() if crypto_provider else "NONE (Plaintext)"
+    print(f"[*] Starting Layer 2 Subscriber...")
+    print(f"[*] Security Algorithm: {algo_name}\n")
+
+    write_csv_header_if_needed(csv_path)
+
+    sock = socket.socket(socket.AF_PACKET, socket.SOCK_RAW, socket.htons(GOOSE_TYPE))
+    sock.bind((IFACE, 0))
+
+    try:
+        while True:
+            raw_packet = sock.recv(2048)
+            process_goose_frame(raw_packet, crypto_provider, csv_path)
+    except KeyboardInterrupt:
+        print("\n[*] Subscriber manually stopped. Exiting safely.")
+        os._exit(0)
+
+def get_crypto_provider(algo_name):
+    algo_name = algo_name.lower()
+    if algo_name == "none": return None
+    elif algo_name == "ed25519": return Ed25519Provider(role="subscriber")
+    elif algo_name == "ecies": return ECIESProvider(role="subscriber")
+
+    key_path = "keys/shared_key.bin"
+    if not os.path.exists(key_path):
+        print(f"Error: {key_path} missing. Run key generator first.")
+        exit(1)
+
+    with open(key_path, "rb") as f: master_shared_key = f.read()
+
+    if algo_name == "chacha": return ChaCha20Provider(master_shared_key)
+    elif algo_name == "ascon": return Ascon128aProvider(master_shared_key)
+    elif algo_name == "aesgcm": return AESGCMProvider(master_shared_key)
+    else:
+        print(f"Unknown algorithm: {algo_name}")
+        exit(1)
+
+if __name__ == "__main__":
+    active_crypto_module = get_crypto_provider(args.algo)
+    start_subscriber(active_crypto_module, args.csv)
